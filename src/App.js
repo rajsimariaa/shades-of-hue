@@ -1500,13 +1500,10 @@ function PaymentModal({ onClose, onSubmit }) {
                 {step === 1 && (
                     <div>
                         <h2 className="text-2xl font-bold mb-4 text-slate-900">Step 1: Make Payment</h2>
-                        <p className="text-slate-600 mb-4">Please scan the QR code with your UPI app or use the UPI ID below to make the payment for your request.</p>
-                        <div className="flex justify-center my-6">
-                            <img src="https://placehold.co/250x250/E2E8F0/475569?text=Your+QR+Code" alt="UPI QR Code" className="rounded-lg" />
-                        </div>
-                        <div className="text-center">
-                            <p className="text-slate-500">Or pay to UPI ID:</p>
-                            <p className="font-mono text-lg font-semibold text-sky-600 tracking-wider">your-upi-id@bank</p>
+                        <p className="text-slate-600 mb-4">Please use the UPI ID below to make the payment for your request.</p>
+                        <div className="text-center my-8">
+                            <p className="text-slate-500">Pay to UPI ID:</p>
+                            <p className="font-mono text-lg font-semibold text-sky-600 tracking-wider">rajsimariaa-2@okaxis</p>
                         </div>
                         <button onClick={handleNext} className="w-full mt-8 py-2 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700">
                             I Have Paid, Next Step
