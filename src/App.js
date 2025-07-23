@@ -6,7 +6,10 @@ import {
     createUserWithEmailAndPassword, 
     signOut, 
     onAuthStateChanged,
-    signInAnonymously
+    reauthenticateWithCredential,
+    EmailAuthProvider,
+    updatePassword,
+    deleteUser
 } from 'firebase/auth';
 import { 
     getFirestore, 
@@ -23,7 +26,7 @@ import {
     Timestamp,
     getDocs
 } from 'firebase/firestore';
-import { ArrowRight, User, Building, Shield, LogOut, Heart, Menu, X, DollarSign, UserCog, MessageSquare } from 'lucide-react';
+import { ArrowRight, User, Building, Shield, LogOut, Heart, Menu, X, DollarSign, UserCog, MessageSquare, CheckCircle, Clock, Edit, BarChart2, KeyRound, Trash2 } from 'lucide-react';
 
 // --- IMPORTANT: Firebase Configuration ---
 // Paste your Firebase project configuration object here.
@@ -40,6 +43,10 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+// Note: Firebase Storage is not used in this version.
+
+const helpCategories = ["Mental Health Support", "Legal Advice", "Community Connection", "Housing Assistance", "Healthcare Services", "Employment", "General Inquiry"];
+
 
 // --- Main App Component ---
 export default function App() {
@@ -162,7 +169,7 @@ function Navbar({ user, userData, setPage, handleLogout, isNavOpen, setIsNavOpen
                                         <button onClick={() => setPage('login')} className="text-slate-600 hover:bg-slate-100 hover:text-slate-900 px-3 py-2 rounded-md text-sm font-medium">Login</button>
                                         <button onClick={() => setPage('signup')} className="bg-sky-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-sky-700 transition-colors">Sign Up</button>
                                         <button onClick={handleDonateClick} className="bg-rose-500 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-rose-600 transition-colors flex items-center">
-                                            <Heart className="mr-2 h-4 w-4" /> Donate
+                                            <Heart className="mr-2" /> Donate
                                         </button>
                                     </>
                                 )}
@@ -198,7 +205,7 @@ function Navbar({ user, userData, setPage, handleLogout, isNavOpen, setIsNavOpen
                                     <button onClick={() => { setPage('login'); setIsNavOpen(false); }} className="w-full text-left text-slate-600 hover:bg-slate-100 hover:text-slate-900 block px-3 py-2 rounded-md text-base font-medium">Login</button>
                                     <button onClick={() => { setPage('signup'); setIsNavOpen(false); }} className="w-full mt-1 text-left bg-sky-600 text-white px-3 py-2 rounded-md text-base font-medium hover:bg-sky-700 transition-colors">Sign Up</button>
                                     <button onClick={handleDonateClick} className="w-full mt-1 text-left bg-rose-500 text-white px-3 py-2 rounded-md text-base font-medium hover:bg-rose-600 transition-colors flex items-center">
-                                        <Heart className="mr-2 h-4 w-4" /> Donate
+                                        <Heart className="mr-2" /> Donate
                                     </button>
                                 </>
                             )}
@@ -293,8 +300,12 @@ function LoginPage({ setPage }) {
                 setPage('home'); 
             }
         } catch (err) {
-            setError("Failed to login. Please check your credentials.");
-            console.error(err);
+            console.error(err.code, err.message);
+            if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
+                setError("Invalid email or password. Please try again.");
+            } else {
+                setError("An unexpected error occurred. Please try again later.");
+            }
         }
     };
 
@@ -351,8 +362,16 @@ function SignUpPage({ setPage }) {
             else setPage('userDashboard');
 
         } catch (err) {
-            setError(err.message);
-            console.error(err);
+            console.error(err.code, err.message);
+            if (err.code === 'auth/email-already-in-use') {
+                setError("This email address is already in use.");
+            } else if (err.code === 'auth/weak-password') {
+                setError("Password is too weak. It should be at least 6 characters long.");
+            } else if (err.code === 'auth/invalid-email') {
+                setError("Please enter a valid email address.");
+            } else {
+                setError("Failed to create an account. Please try again.");
+            }
         }
     };
 
@@ -389,7 +408,7 @@ function SignUpPage({ setPage }) {
 
 // --- Dashboards ---
 function UserDashboard({ user, userData }) {
-    const [view, setView] = useState('requests'); // requests or testimonials
+    const [view, setView] = useState('requests'); // requests, testimonials, or account
     
     return (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 animate-fadeIn">
@@ -404,10 +423,15 @@ function UserDashboard({ user, userData }) {
                     <button onClick={() => setView('testimonials')} className={`${view === 'testimonials' ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-400'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}>
                         My Testimonials
                     </button>
+                    <button onClick={() => setView('account')} className={`${view === 'account' ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-400'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}>
+                        My Account
+                    </button>
                 </nav>
             </div>
 
-            {view === 'requests' ? <UserRequestDashboard user={user} userData={userData} /> : <UserTestimonialsDashboard user={user} userData={userData} />}
+            {view === 'requests' && <UserRequestDashboard user={user} userData={userData} />}
+            {view === 'testimonials' && <UserTestimonialsDashboard user={user} userData={userData} />}
+            {view === 'account' && <MyAccountPage user={user} userData={userData} />}
         </div>
     );
 }
@@ -415,21 +439,33 @@ function UserDashboard({ user, userData }) {
 function UserRequestDashboard({ user, userData }) {
     const [requests, setRequests] = useState([]);
     const [organizations, setOrganizations] = useState([]);
+    const [filteredOrgs, setFilteredOrgs] = useState([]);
     const [selectedOrg, setSelectedOrg] = useState('');
     const [helpType, setHelpType] = useState('');
     const [description, setDescription] = useState('');
     const [error, setError] = useState('');
-
-    const helpCategories = ["Mental Health Support", "Legal Advice", "Community Connection", "Housing Assistance", "Healthcare Services", "General Inquiry"];
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
 
     useEffect(() => {
         const orgsQuery = query(collection(db, "users"), where("role", "==", "organization"), where("status", "==", "active"));
         const unsubscribe = onSnapshot(orgsQuery, (snapshot) => {
-            setOrganizations(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+            const allOrgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setOrganizations(allOrgs);
+            setFilteredOrgs(allOrgs); // Initially show all orgs
         });
         return () => unsubscribe();
     }, []);
     
+    useEffect(() => {
+        if (helpType) {
+            const filtered = organizations.filter(org => org.services && org.services.includes(helpType));
+            setFilteredOrgs(filtered);
+        } else {
+            setFilteredOrgs(organizations);
+        }
+        setSelectedOrg(''); // Reset selected org when help type changes
+    }, [helpType, organizations]);
+
     useEffect(() => {
         if (!user) return;
         const q = query(collection(db, "requests"), where("userId", "==", user.uid));
@@ -444,25 +480,37 @@ function UserRequestDashboard({ user, userData }) {
         return () => unsubscribe();
     }, [user]);
 
-    const handleSubmitRequest = async (e) => {
+    const handleOpenPaymentModal = (e) => {
         e.preventDefault();
         if (!selectedOrg || !helpType || description.trim() === '') {
-            setError('Please fill out all fields.');
+            setError('Please fill out all fields before proceeding to payment.');
             return;
         }
         setError('');
+        setShowPaymentModal(true);
+    };
+
+    const handleRequestSubmit = async (transactionId) => {
         const selectedOrgData = organizations.find(org => org.id === selectedOrg);
         try {
             await addDoc(collection(db, "requests"), {
-                userId: user.uid, userName: userData.name, requestText: description, status: 'pending',
+                userId: user.uid, userName: userData.name, requestText: description, 
+                status: 'pending_payment_approval',
                 createdAt: Timestamp.now(), selectedOrg: selectedOrg, orgName: selectedOrgData.orgName, helpType: helpType,
+                transactionId: transactionId,
             });
             setSelectedOrg(''); setHelpType(''); setDescription('');
-        } catch (err) { setError('Failed to submit request.'); console.error(err); }
+            setShowPaymentModal(false);
+        } catch (err) { 
+            setError('Failed to submit request.'); 
+            console.error(err); 
+        }
     };
 
     const getStatusChip = (status) => {
         switch (status) {
+            case 'pending_payment_approval': return 'bg-orange-100 text-orange-800';
+            case 'payment_rejected': return 'bg-red-100 text-red-800';
             case 'pending': return 'bg-yellow-100 text-yellow-800';
             case 'accepted': return 'bg-green-100 text-green-800';
             case 'declined': return 'bg-red-100 text-red-800';
@@ -471,52 +519,57 @@ function UserRequestDashboard({ user, userData }) {
     };
 
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-1">
-                <div className="bg-white p-6 rounded-lg shadow-lg">
-                    <h2 className="text-xl font-semibold mb-4 text-slate-900">Submit a New Request</h2>
-                    <form onSubmit={handleSubmitRequest} className="space-y-4">
-                        <select value={selectedOrg} onChange={e => setSelectedOrg(e.target.value)} required className="w-full px-3 py-2 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500">
-                            <option value="" disabled>Choose an organization...</option>
-                            {organizations.map(org => <option key={org.id} value={org.id}>{org.orgName}</option>)}
-                        </select>
-                        <select value={helpType} onChange={e => setHelpType(e.target.value)} required className="w-full px-3 py-2 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500">
-                            <option value="" disabled>Choose a category...</option>
-                            {helpCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                        </select>
-                        <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe the help you need..." rows="5" required className="w-full px-3 py-2 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
-                        {error && <p className="text-red-500 text-sm">{error}</p>}
-                        <button type="submit" className="w-full py-2 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700 transition-colors">Submit Request</button>
-                    </form>
+        <>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div className="lg:col-span-1">
+                    <div className="bg-white p-6 rounded-lg shadow-lg">
+                        <h2 className="text-xl font-semibold mb-4 text-slate-900">Submit a New Request</h2>
+                        <form onSubmit={handleOpenPaymentModal} className="space-y-4">
+                            <select value={helpType} onChange={e => setHelpType(e.target.value)} required className="w-full px-3 py-2 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500">
+                                <option value="" disabled>Choose a category...</option>
+                                {helpCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                            </select>
+                            <select value={selectedOrg} onChange={e => setSelectedOrg(e.target.value)} required className="w-full px-3 py-2 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" disabled={!helpType}>
+                                <option value="" disabled>Choose an organization...</option>
+                                {filteredOrgs.length > 0 ? filteredOrgs.map(org => <option key={org.id} value={org.id}>{org.orgName}</option>) : <option disabled>No organizations offer this service</option>}
+                            </select>
+                            <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe the help you need..." rows="5" required className="w-full px-3 py-2 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
+                            {error && <p className="text-red-500 text-sm">{error}</p>}
+                            <button type="submit" className="w-full py-2 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700 transition-colors">Proceed to Payment</button>
+                        </form>
+                    </div>
                 </div>
-            </div>
-            <div className="lg:col-span-2">
-                 <div className="bg-white p-6 rounded-lg shadow-lg">
-                    <h2 className="text-xl font-semibold mb-4 text-slate-900">My Requests</h2>
-                    <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
-                        {requests.length > 0 ? requests.map(req => (
-                            <div key={req.id} className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-                                <div className="flex justify-between items-start">
-                                    <div>
-                                        <p className="font-semibold text-sky-600">{req.helpType}</p>
-                                        <p className="text-sm text-slate-500">To: {req.orgName}</p>
-                                        <p className="text-slate-700 mt-2">{req.requestText}</p>
+                <div className="lg:col-span-2">
+                     <div className="bg-white p-6 rounded-lg shadow-lg">
+                        <h2 className="text-xl font-semibold mb-4 text-slate-900">My Requests</h2>
+                        <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+                            {requests.length > 0 ? requests.map(req => (
+                                <div key={req.id} className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                                    <div className="flex justify-between items-start">
+                                        <div>
+                                            <p className="font-semibold text-sky-600">{req.helpType}</p>
+                                            <p className="text-sm text-slate-500">To: {req.orgName}</p>
+                                            <p className="text-slate-700 mt-2">{req.requestText}</p>
+                                        </div>
+                                        <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusChip(req.status)}`}>{req.status.replace(/_/g, ' ')}</span>
                                     </div>
-                                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusChip(req.status)}`}>{req.status}</span>
+                                    <p className="text-xs text-slate-400 mt-2">{req.createdAt.toDate().toLocaleString()}</p>
+                                    {req.status === 'payment_rejected' && req.rejectionReason && (<div className="mt-2 p-3 bg-red-100 rounded-md"><p className="text-sm font-semibold text-red-800">Rejection Reason:</p><p className="text-sm text-red-700">{req.rejectionReason}</p></div>)}
+                                    {req.status === 'declined' && req.declineReason && (<div className="mt-2 p-3 bg-red-100 rounded-md"><p className="text-sm font-semibold text-red-800">Reason for Decline:</p><p className="text-sm text-red-700">{req.declineReason}</p></div>)}
+                                    {req.status === 'accepted' && (<div className="mt-2 p-3 bg-green-100 rounded-md"><p className="text-sm font-semibold text-green-800">Accepted by:</p><p className="text-sm text-green-700">{req.orgName}</p></div>)}
                                 </div>
-                                <p className="text-xs text-slate-400 mt-2">{req.createdAt.toDate().toLocaleString()}</p>
-                                {req.status === 'declined' && req.declineReason && (<div className="mt-2 p-3 bg-red-100 rounded-md"><p className="text-sm font-semibold text-red-800">Reason for Decline:</p><p className="text-sm text-red-700">{req.declineReason}</p></div>)}
-                                {req.status === 'accepted' && (<div className="mt-2 p-3 bg-green-100 rounded-md"><p className="text-sm font-semibold text-green-800">Accepted by:</p><p className="text-sm text-green-700">{req.orgName}</p></div>)}
-                            </div>
-                        )) : (<p className="text-slate-500">You have no submitted requests.</p>)}
+                            )) : (<p className="text-slate-500">You have no submitted requests.</p>)}
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
+            {showPaymentModal && <PaymentModal onClose={() => setShowPaymentModal(false)} onSubmit={handleRequestSubmit} />}
+        </>
     );
 }
 
 function UserTestimonialsDashboard({ user, userData }) {
+    // ... This component remains unchanged ...
     const [testimonialText, setTestimonialText] = useState('');
     const [myTestimonials, setMyTestimonials] = useState([]);
     const [error, setError] = useState('');
@@ -598,12 +651,11 @@ function UserTestimonialsDashboard({ user, userData }) {
 }
 
 function OrganizationDashboard({ user, userData }) {
-    // ... Existing OrganizationDashboard code ...
+    const [view, setView] = useState('pending'); // pending, actioned, profile, account
     const [requests, setRequests] = useState([]);
     const [selectedRequest, setSelectedRequest] = useState(null);
     const [declineReason, setDeclineReason] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [view, setView] = useState('pending');
 
     useEffect(() => {
         if (!user) return;
@@ -631,10 +683,16 @@ function OrganizationDashboard({ user, userData }) {
         const reqRef = doc(db, 'requests', reqId);
         await updateDoc(reqRef, {
             status: 'accepted',
+            progress: 'Not Started', // Initialize progress
             actionedByOrgId: user.uid,
             actionedByOrgName: userData.orgName,
             actionedAt: Timestamp.now()
         });
+    };
+
+    const handleProgressChange = async (reqId, newProgress) => {
+        const reqRef = doc(db, 'requests', reqId);
+        await updateDoc(reqRef, { progress: newProgress });
     };
 
     const openDeclineModal = (request) => {
@@ -669,7 +727,7 @@ function OrganizationDashboard({ user, userData }) {
     return (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 animate-fadeIn">
             <h1 className="text-3xl font-bold text-slate-900 mb-2">Organization Dashboard</h1>
-            <p className="text-slate-500 mb-8">Welcome, {userData?.orgName}. Review and respond to user requests.</p>
+            <p className="text-slate-500 mb-8">Welcome, {userData?.orgName}.</p>
             
             <div className="mb-6 border-b border-slate-300">
                 <nav className="-mb-px flex space-x-8" aria-label="Tabs">
@@ -679,44 +737,71 @@ function OrganizationDashboard({ user, userData }) {
                     <button onClick={() => setView('actioned')} className={`${view === 'actioned' ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-400'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}>
                         Actioned Requests
                     </button>
+                    <button onClick={() => setView('profile')} className={`${view === 'profile' ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-400'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}>
+                        My Profile
+                    </button>
+                    <button onClick={() => setView('account')} className={`${view === 'account' ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-400'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}>
+                        My Account
+                    </button>
                 </nav>
             </div>
 
-            <div className="space-y-4">
-                {requests.length > 0 ? requests.map(req => (
-                    <div key={req.id} className="bg-white p-4 rounded-lg shadow-md">
-                        <div className="flex justify-between items-start mb-2">
-                             <div>
-                                <p className="font-semibold text-sky-600">{req.helpType}</p>
-                                <p className="text-slate-700 mt-2">{req.requestText}</p>
-                             </div>
-                             <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusChip(req.status)}`}>
-                                {req.status}
-                            </span>
-                        </div>
-                        <div className="flex justify-between items-end">
-                            <div>
-                                <p className="text-sm text-slate-500">From: {req.userName}</p>
-                                <p className="text-xs text-slate-400">{req.createdAt.toDate().toLocaleString()}</p>
+            {view === 'profile' ? (
+                <div className="bg-white p-6 rounded-lg shadow-lg">
+                    <h2 className="text-xl font-semibold mb-4 text-slate-900">Services We Offer</h2>
+                    <ul className="list-disc list-inside space-y-2">
+                        {userData?.services?.map(service => <li key={service} className="text-slate-600">{service}</li>)}
+                    </ul>
+                </div>
+            ) : view === 'account' ? (
+                <MyAccountPage user={user} userData={userData} />
+            ) : (
+                <div className="space-y-4">
+                    {requests.length > 0 ? requests.map(req => (
+                        <div key={req.id} className="bg-white p-4 rounded-lg shadow-md">
+                            <div className="flex justify-between items-start mb-2">
+                                 <div>
+                                    <p className="font-semibold text-sky-600">{req.helpType}</p>
+                                    <p className="text-slate-700 mt-2">{req.requestText}</p>
+                                 </div>
+                                 <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusChip(req.status)}`}>
+                                    {req.status}
+                                </span>
                             </div>
-                            {view === 'pending' && (
-                                <div className="flex gap-2">
-                                    <button onClick={() => handleAccept(req.id)} className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded-md text-sm font-semibold">Accept</button>
-                                    <button onClick={() => openDeclineModal(req)} className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-md text-sm font-semibold">Decline</button>
+                            <div className="flex justify-between items-end">
+                                <div>
+                                    <p className="text-sm text-slate-500">From: {req.userName}</p>
+                                    <p className="text-xs text-slate-400">{req.createdAt.toDate().toLocaleString()}</p>
+                                </div>
+                                {view === 'pending' && (
+                                    <div className="flex gap-2">
+                                        <button onClick={() => handleAccept(req.id)} className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded-md text-sm font-semibold">Accept</button>
+                                        <button onClick={() => openDeclineModal(req)} className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-md text-sm font-semibold">Decline</button>
+                                    </div>
+                                )}
+                            </div>
+                             {req.status === 'accepted' && (
+                                <div className="mt-4 border-t border-slate-200 pt-2 flex items-center gap-2">
+                                    <label className="text-sm font-medium">Progress:</label>
+                                    <select value={req.progress || 'Not Started'} onChange={e => handleProgressChange(req.id, e.target.value)} className="bg-slate-100 border-slate-300 rounded p-1 text-sm">
+                                        <option>Not Started</option>
+                                        <option>In Progress</option>
+                                        <option>Completed</option>
+                                    </select>
+                                </div>
+                            )}
+                             {req.status === 'declined' && req.declineReason && (
+                                <div className="mt-2 p-3 bg-red-100 rounded-md">
+                                    <p className="text-sm font-semibold text-red-800">Reason for Decline:</p>
+                                    <p className="text-sm text-red-700">{req.declineReason}</p>
                                 </div>
                             )}
                         </div>
-                         {req.status === 'declined' && req.declineReason && (
-                            <div className="mt-2 p-3 bg-red-100 rounded-md">
-                                <p className="text-sm font-semibold text-red-800">Reason for Decline:</p>
-                                <p className="text-sm text-red-700">{req.declineReason}</p>
-                            </div>
-                        )}
-                    </div>
-                )) : (
-                    <p className="text-slate-500">No requests in this category.</p>
-                )}
-            </div>
+                    )) : (
+                        <p className="text-slate-500">No requests in this category.</p>
+                    )}
+                </div>
+            )}
 
             {isModalOpen && (
                 <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-50">
@@ -741,7 +826,7 @@ function OrganizationDashboard({ user, userData }) {
 }
 
 function AdminDashboard({ user, userData }) {
-    const [view, setView] = useState('users');
+    const [view, setView] = useState('overview');
     const [users, setUsers] = useState([]);
     const [orgs, setOrgs] = useState([]);
     const [admins, setAdmins] = useState([]);
@@ -800,12 +885,15 @@ function AdminDashboard({ user, userData }) {
     
     const renderContent = () => {
         switch(view) {
+            case 'overview': return <AdminStats users={users} orgs={orgs} requests={requests} />;
             case 'users': return <UserManagementTable users={users} onDeactivate={openDeactivateModal} />;
             case 'orgs': return <OrgManagementTable orgs={orgs} onDeactivate={openDeactivateModal} />;
             case 'admins': return <AdminManagementTable admins={admins} currentAdminId={user.uid} onDeactivate={openDeactivateModal} />;
             case 'requests': return <RequestLog requests={requests} />;
             case 'donations': return <DonationLog donations={donations} />;
             case 'testimonials': return <TestimonialManagement testimonials={testimonials} />;
+            case 'payment_approvals': return <PaymentApprovalDashboard requests={requests.filter(r => r.status === 'pending_payment_approval')} />;
+            case 'account': return <MyAccountPage user={user} userData={userData} />;
             default: return null;
         }
     };
@@ -817,6 +905,12 @@ function AdminDashboard({ user, userData }) {
             <div className="flex flex-col md:flex-row gap-8">
                 <aside className="md:w-1/4">
                     <nav className="flex flex-col space-y-2 bg-white p-4 rounded-lg shadow-lg">
+                        <button onClick={() => setView('overview')} className={`flex items-center p-3 rounded-lg transition-colors ${view === 'overview' ? 'bg-sky-100 text-sky-700' : 'hover:bg-slate-100 text-slate-700'}`}>
+                            <BarChart2 className="mr-3" /> Platform Overview
+                        </button>
+                        <button onClick={() => setView('payment_approvals')} className={`flex items-center p-3 rounded-lg transition-colors ${view === 'payment_approvals' ? 'bg-sky-100 text-sky-700' : 'hover:bg-slate-100 text-slate-700'}`}>
+                            <CheckCircle className="mr-3" /> Payment Approval
+                        </button>
                         <button onClick={() => setView('users')} className={`flex items-center p-3 rounded-lg transition-colors ${view === 'users' ? 'bg-sky-100 text-sky-700' : 'hover:bg-slate-100 text-slate-700'}`}>
                             <User className="mr-3" /> User Management
                         </button>
@@ -834,6 +928,9 @@ function AdminDashboard({ user, userData }) {
                         </button>
                         <button onClick={() => setView('testimonials')} className={`flex items-center p-3 rounded-lg transition-colors ${view === 'testimonials' ? 'bg-sky-100 text-sky-700' : 'hover:bg-slate-100 text-slate-700'}`}>
                             <MessageSquare className="mr-3" /> Testimonials
+                        </button>
+                         <button onClick={() => setView('account')} className={`flex items-center p-3 rounded-lg transition-colors ${view === 'account' ? 'bg-sky-100 text-sky-700' : 'hover:bg-slate-100 text-slate-700'}`}>
+                            <UserCog className="mr-3" /> My Account
                         </button>
                     </nav>
                 </aside>
@@ -859,7 +956,14 @@ function CreateUserForm({ role }) {
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [services, setServices] = useState([]);
     const [message, setMessage] = useState({ type: '', text: '' });
+
+    const handleServiceChange = (service) => {
+        setServices(prev => 
+            prev.includes(service) ? prev.filter(s => s !== service) : [...prev, service]
+        );
+    };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -881,12 +985,15 @@ function CreateUserForm({ role }) {
                 createdAt: Timestamp.now(),
                 status: 'active'
             };
-            if (role === 'organization') userData.orgName = name;
+            if (role === 'organization') {
+                userData.orgName = name;
+                userData.services = services;
+            }
 
             await setDoc(doc(db, 'users', user.uid), userData);
             
             setMessage({ type: 'success', text: `${role.charAt(0).toUpperCase() + role.slice(1)} created successfully!` });
-            setName(''); setEmail(''); setPassword('');
+            setName(''); setEmail(''); setPassword(''); setServices([]);
             
             await signOut(tempAuth);
 
@@ -899,11 +1006,26 @@ function CreateUserForm({ role }) {
     return (
         <div className="mb-8 p-6 bg-slate-50 rounded-lg border border-slate-200">
             <h3 className="text-lg font-semibold mb-4 text-slate-900">Create New {role.charAt(0).toUpperCase() + role.slice(1)}</h3>
-            <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <input type="text" placeholder={role === 'organization' ? "Organization Name" : 'Full Name'} value={name} onChange={e => setName(e.target.value)} required className="w-full px-3 py-2 text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
-                <input type="email" placeholder="Email Address" value={email} onChange={e => setEmail(e.target.value)} required className="w-full px-3 py-2 text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
-                <input type="password" placeholder="Temporary Password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full px-3 py-2 text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
-                <button type="submit" className="md:col-span-2 w-full py-2 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700">Create {role.charAt(0).toUpperCase() + role.slice(1)}</button>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <input type="text" placeholder={role === 'organization' ? "Organization Name" : 'Full Name'} value={name} onChange={e => setName(e.target.value)} required className="w-full px-3 py-2 text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
+                    <input type="email" placeholder="Email Address" value={email} onChange={e => setEmail(e.target.value)} required className="w-full px-3 py-2 text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
+                    <input type="password" placeholder="Temporary Password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full px-3 py-2 text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
+                </div>
+                {role === 'organization' && (
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">Services Offered</label>
+                        <div className="grid grid-cols-2 gap-2">
+                            {helpCategories.map(cat => (
+                                <label key={cat} className="flex items-center space-x-2">
+                                    <input type="checkbox" checked={services.includes(cat)} onChange={() => handleServiceChange(cat)} className="h-4 w-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500" />
+                                    <span className="text-sm text-slate-600">{cat}</span>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+                )}
+                <button type="submit" className="w-full py-2 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700">Create {role.charAt(0).toUpperCase() + role.slice(1)}</button>
             </form>
             {message.text && <p className={`mt-4 text-sm ${message.type === 'success' ? 'text-green-500' : 'text-red-500'}`}>{message.text}</p>}
         </div>
@@ -947,6 +1069,18 @@ function UserManagementTable({ users, onDeactivate }) {
 }
 
 function OrgManagementTable({ orgs, onDeactivate }) {
+    const [editingOrg, setEditingOrg] = useState(null);
+
+    const handleEdit = (org) => {
+        setEditingOrg(org);
+    };
+
+    const handleUpdateServices = async (orgId, newServices) => {
+        const docRef = doc(db, 'users', orgId);
+        await updateDoc(docRef, { services: newServices });
+        setEditingOrg(null);
+    };
+
     return (
         <div>
             <CreateUserForm role="organization" />
@@ -957,8 +1091,7 @@ function OrgManagementTable({ orgs, onDeactivate }) {
                         <tr>
                             <th className="px-6 py-3">Name</th>
                             <th className="px-6 py-3">Email</th>
-                            <th className="px-6 py-3">Joined</th>
-                            <th className="px-6 py-3">Status</th>
+                            <th className="px-6 py-3">Services</th>
                             <th className="px-6 py-3">Action</th>
                         </tr>
                     </thead>
@@ -967,11 +1100,9 @@ function OrgManagementTable({ orgs, onDeactivate }) {
                             <tr key={org.id} className="border-b border-slate-200 hover:bg-slate-50">
                                 <td className="px-6 py-4">{org.orgName}</td>
                                 <td className="px-6 py-4">{org.email}</td>
-                                <td className="px-6 py-4">{org.createdAt.toDate().toLocaleDateString()}</td>
-                                <td className="px-6 py-4">
-                                    <span className={`px-2 py-1 rounded-full text-xs ${org.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{org.status}</span>
-                                </td>
-                                <td className="px-6 py-4">
+                                <td className="px-6 py-4 text-xs">{(org.services || []).join(', ')}</td>
+                                <td className="px-6 py-4 flex gap-4">
+                                    <button onClick={() => handleEdit(org)} className="font-medium text-sky-600 hover:underline"><Edit size={16} /></button>
                                     {org.status === 'active' && <button onClick={() => onDeactivate(org.id, org.orgName)} className="font-medium text-red-600 hover:underline">Deactivate</button>}
                                 </td>
                             </tr>
@@ -979,6 +1110,7 @@ function OrgManagementTable({ orgs, onDeactivate }) {
                     </tbody>
                 </table>
             </div>
+            {editingOrg && <EditOrgServicesModal org={editingOrg} onClose={() => setEditingOrg(null)} onUpdate={handleUpdateServices} />}
         </div>
     );
 }
@@ -1077,7 +1209,7 @@ function DonationLog({ donations }) {
                     </div>
                     <div>
                         <p className="text-sm text-slate-500">Total Raised</p>
-                        <p className="text-2xl font-bold text-slate-900">${totalAmount.toFixed(2)}</p>
+                        <p className="text-2xl font-bold text-slate-900">₹{totalAmount.toFixed(2)}</p>
                     </div>
                 </div>
                 <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg flex items-center">
@@ -1106,7 +1238,7 @@ function DonationLog({ donations }) {
                             <tr key={d.id} className="border-b border-slate-200 hover:bg-slate-50">
                                 <td className="px-6 py-4">{d.donorName || 'Anonymous'}</td>
                                 <td className="px-6 py-4">{d.donorEmail || 'N/A'}</td>
-                                <td className="px-6 py-4 font-semibold text-green-600">${d.amount.toFixed(2)}</td>
+                                <td className="px-6 py-4 font-semibold text-green-600">₹{d.amount.toFixed(2)}</td>
                                 <td className="px-6 py-4">{d.donatedAt.toDate().toLocaleString()}</td>
                             </tr>
                         ))}
@@ -1154,6 +1286,44 @@ function TestimonialManagement({ testimonials }) {
     );
 }
 
+function PaymentApprovalDashboard({ requests }) {
+    const handleApprove = async (id) => {
+        const docRef = doc(db, 'requests', id);
+        await updateDoc(docRef, { status: 'pending' });
+    };
+
+    const handleReject = async (id) => {
+        const docRef = doc(db, 'requests', id);
+        await updateDoc(docRef, { status: 'payment_rejected', rejectionReason: 'Payment not confirmed.' });
+    };
+
+    return (
+        <div>
+            <h2 className="text-xl font-semibold mb-4 text-slate-900">Payment Approvals</h2>
+            <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
+                {requests.length > 0 ? requests.map(req => (
+                    <div key={req.id} className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                        <div className="flex justify-between items-start mb-2">
+                            <div>
+                                <p className="font-semibold text-sky-600">{req.helpType} for {req.userName}</p>
+                                <p className="text-sm text-slate-500">To: {req.orgName}</p>
+                                <p className="mt-2 text-slate-700"><strong>Transaction ID:</strong> {req.transactionId}</p>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => handleApprove(req.id)} className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded-md text-xs font-semibold">Approve</button>
+                                <button onClick={() => handleReject(req.id)} className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-md text-xs font-semibold">Reject</button>
+                            </div>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-2">{req.createdAt.toDate().toLocaleString()}</p>
+                    </div>
+                )) : (
+                    <p className="text-slate-500">No requests are pending payment approval.</p>
+                )}
+            </div>
+        </div>
+    );
+}
+
 
 // --- Reusable Modal Components ---
 function ConfirmationModal({ isOpen, onClose, onConfirm, title, children }) {
@@ -1174,7 +1344,7 @@ function ConfirmationModal({ isOpen, onClose, onConfirm, title, children }) {
 }
 
 function DonationModal({ isOpen, onClose }) {
-    const [amount, setAmount] = useState(25);
+    const [amount, setAmount] = useState(250);
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [error, setError] = useState('');
@@ -1197,7 +1367,7 @@ function DonationModal({ isOpen, onClose }) {
 
     const handleClose = () => {
         onClose();
-        setTimeout(() => { setIsSuccess(false); setAmount(25); setName(''); setEmail(''); setError(''); }, 300);
+        setTimeout(() => { setIsSuccess(false); setAmount(250); setName(''); setEmail(''); setError(''); }, 300);
     };
 
     if (!isOpen) return null;
@@ -1220,10 +1390,10 @@ function DonationModal({ isOpen, onClose }) {
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 mb-2">Choose an amount</label>
                                 <div className="grid grid-cols-3 gap-2">
-                                    {[10, 25, 50].map(val => (<button key={val} type="button" onClick={() => setAmount(val)} className={`py-2 rounded-md font-semibold transition-colors ${amount === val ? 'bg-sky-600 text-white' : 'bg-slate-200 hover:bg-slate-300'}`}>${val}</button>))}
+                                    {[100, 250, 500].map(val => (<button key={val} type="button" onClick={() => setAmount(val)} className={`py-2 rounded-md font-semibold transition-colors ${amount === val ? 'bg-sky-600 text-white' : 'bg-slate-200 hover:bg-slate-300'}`}>₹{val}</button>))}
                                 </div>
                                 <div className="relative mt-4">
-                                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">$</span>
+                                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">₹</span>
                                     <input type="number" value={amount} onChange={e => setAmount(e.target.value)} required className="w-full pl-7 pr-3 py-2 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
                                 </div>
                             </div>
@@ -1237,7 +1407,7 @@ function DonationModal({ isOpen, onClose }) {
                             </div>
                             {error && <p className="text-red-500 text-sm">{error}</p>}
                             <button type="submit" disabled={isSubmitting} className="w-full py-3 px-4 font-semibold text-white bg-rose-500 rounded-md hover:bg-rose-600 disabled:bg-slate-400 disabled:cursor-not-allowed flex justify-center items-center">
-                                {isSubmitting ? 'Processing...' : `Donate $${amount}`}
+                                {isSubmitting ? 'Processing...' : `Donate ₹${amount}`}
                             </button>
                         </form>
                     </>
@@ -1263,8 +1433,8 @@ function TestimonialsSection() {
     }
 
     return (
-        <section className="py-20 bg-white">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <section className="bg-white">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
                 <div className="text-center">
                     <h2 className="text-3xl font-bold text-slate-900">What Our Community Says</h2>
                     <p className="mt-4 text-lg text-slate-600">Real stories from the people we support.</p>
@@ -1279,5 +1449,268 @@ function TestimonialsSection() {
                 </div>
             </div>
         </section>
+    );
+}
+
+function PaymentModal({ onClose, onSubmit }) {
+    const [step, setStep] = useState(1);
+    const [transactionId, setTransactionId] = useState('');
+    const [error, setError] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    const handleNext = () => {
+        setStep(2);
+    };
+
+    const handleFinalSubmit = async () => {
+        if (transactionId.trim() === '') {
+            setError('Please enter a valid Transaction ID.');
+            return;
+        }
+        setIsSubmitting(true);
+        setError('');
+
+        try {
+            await onSubmit(transactionId);
+        } catch (err) {
+            console.error("Submission failed:", err);
+            setError("Submission failed. Please try again.");
+            setIsSubmitting(false); // Re-enable button on error
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-50 animate-fadeIn">
+            <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-md mx-4 relative">
+                <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X size={24} /></button>
+                {step === 1 && (
+                    <div>
+                        <h2 className="text-2xl font-bold mb-4 text-slate-900">Step 1: Make Payment</h2>
+                        <p className="text-slate-600 mb-4">Please scan the QR code with your UPI app or use the UPI ID below to make the payment for your request.</p>
+                        <div className="flex justify-center my-6">
+                            <img src="https://placehold.co/250x250/E2E8F0/475569?text=Your+QR+Code" alt="UPI QR Code" className="rounded-lg" />
+                        </div>
+                        <div className="text-center">
+                            <p className="text-slate-500">Or pay to UPI ID:</p>
+                            <p className="font-mono text-lg font-semibold text-sky-600 tracking-wider">your-upi-id@bank</p>
+                        </div>
+                        <button onClick={handleNext} className="w-full mt-8 py-2 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700">
+                            I Have Paid, Next Step
+                        </button>
+                    </div>
+                )}
+                {step === 2 && (
+                    <div>
+                        <h2 className="text-2xl font-bold mb-4 text-slate-900">Step 2: Confirm Payment</h2>
+                        <p className="text-slate-600 mb-4">Please provide the transaction details to help us verify your payment.</p>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700">Transaction ID</label>
+                                <input 
+                                    type="text" 
+                                    value={transactionId} 
+                                    onChange={e => setTransactionId(e.target.value)} 
+                                    required 
+                                    placeholder="Enter the UPI transaction ID"
+                                    className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" 
+                                />
+                            </div>
+                            {error && <p className="text-red-500 text-sm">{error}</p>}
+                        </div>
+                         <button onClick={handleFinalSubmit} disabled={isSubmitting} className="w-full mt-8 py-2 px-4 font-semibold text-white bg-green-600 rounded-md hover:bg-green-700 disabled:bg-slate-400 disabled:cursor-not-allowed">
+                            {isSubmitting ? 'Submitting...' : 'Submit Request for Approval'}
+                        </button>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function EditOrgServicesModal({ org, onClose, onUpdate }) {
+    const [services, setServices] = useState(org.services || []);
+
+    const handleServiceChange = (service) => {
+        setServices(prev => 
+            prev.includes(service) ? prev.filter(s => s !== service) : [...prev, service]
+        );
+    };
+
+    const handleSave = () => {
+        onUpdate(org.id, services);
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-50 animate-fadeIn">
+            <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-md mx-4 relative">
+                <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X size={24} /></button>
+                <h2 className="text-2xl font-bold mb-4 text-slate-900">Edit Services for {org.orgName}</h2>
+                <div className="grid grid-cols-2 gap-4">
+                    {helpCategories.map(cat => (
+                        <label key={cat} className="flex items-center space-x-2">
+                            <input type="checkbox" checked={services.includes(cat)} onChange={() => handleServiceChange(cat)} className="h-4 w-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500" />
+                            <span className="text-sm text-slate-600">{cat}</span>
+                        </label>
+                    ))}
+                </div>
+                <div className="flex justify-end gap-4 mt-8">
+                    <button onClick={onClose} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-md text-sm font-semibold">Cancel</button>
+                    <button onClick={handleSave} className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-md text-sm font-semibold">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function AdminStats({ users, orgs, requests }) {
+    const activeUsers = users.filter(u => u.status === 'active').length;
+    const activeOrgs = orgs.filter(o => o.status === 'active').length;
+    const pendingPayment = requests.filter(r => r.status === 'pending_payment_approval').length;
+    const pendingOrg = requests.filter(r => r.status === 'pending').length;
+    const inProgress = requests.filter(r => r.progress === 'In Progress').length;
+    const completed = requests.filter(r => r.progress === 'Completed').length;
+
+    const stats = [
+        { label: 'Active Users', value: activeUsers },
+        { label: 'Active Organizations', value: activeOrgs },
+        { label: 'Pending Payment', value: pendingPayment },
+        { label: 'Pending Organization', value: pendingOrg },
+        { label: 'In Progress', value: inProgress },
+        { label: 'Completed Requests', value: completed },
+    ];
+
+    return (
+        <div>
+            <h2 className="text-xl font-semibold mb-4 text-slate-900">Platform Overview</h2>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                {stats.map(stat => (
+                    <div key={stat.label} className="bg-slate-50 p-4 rounded-lg border border-slate-200 text-center">
+                        <p className="text-3xl font-bold text-sky-600">{stat.value}</p>
+                        <p className="text-sm text-slate-500">{stat.label}</p>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function MyAccountPage({ user, userData }) {
+    const [name, setName] = useState(userData?.name || '');
+    const [currentPassword, setCurrentPassword] = useState('');
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+    const [deletePassword, setDeletePassword] = useState('');
+    const [error, setError] = useState('');
+    const [success, setSuccess] = useState('');
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+
+    const handleDetailsUpdate = async (e) => {
+        e.preventDefault();
+        setError('');
+        setSuccess('');
+        try {
+            const userRef = doc(db, 'users', user.uid);
+            await updateDoc(userRef, { name: name });
+            setSuccess('Your details have been updated successfully.');
+        } catch (err) {
+            setError('Failed to update details. Please try again.');
+        }
+    };
+
+    const handlePasswordUpdate = async (e) => {
+        e.preventDefault();
+        setError('');
+        setSuccess('');
+        if (newPassword !== confirmPassword) {
+            setError("New passwords do not match.");
+            return;
+        }
+        if (newPassword.length < 6) {
+            setError("Password should be at least 6 characters long.");
+            return;
+        }
+
+        try {
+            const credential = EmailAuthProvider.credential(user.email, currentPassword);
+            await reauthenticateWithCredential(user, credential);
+            await updatePassword(user, newPassword);
+            setSuccess('Password updated successfully.');
+            setCurrentPassword('');
+            setNewPassword('');
+            setConfirmPassword('');
+        } catch (err) {
+            setError('Failed to update password. Please check your current password and try again.');
+        }
+    };
+
+    const handleDeleteAccount = async () => {
+        setError('');
+        try {
+            const credential = EmailAuthProvider.credential(user.email, deletePassword);
+            await reauthenticateWithCredential(user, credential);
+            await deleteUser(user);
+            // The onAuthStateChanged listener will handle logout and page redirect.
+        } catch (err) {
+            setError('Failed to delete account. Please check your password and try again.');
+        }
+    };
+
+    return (
+        <div className="space-y-8">
+            <div className="bg-white p-6 rounded-lg shadow-lg">
+                <h2 className="text-xl font-semibold mb-4 text-slate-900">Edit Account Details</h2>
+                <form onSubmit={handleDetailsUpdate} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700">Name</label>
+                        <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
+                    </div>
+                    <button type="submit" className="px-4 py-2 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700">Save Changes</button>
+                </form>
+            </div>
+
+            <div className="bg-white p-6 rounded-lg shadow-lg">
+                <h2 className="text-xl font-semibold mb-4 text-slate-900">Update Password</h2>
+                <form onSubmit={handlePasswordUpdate} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700">Current Password</label>
+                        <input type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700">New Password</label>
+                        <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700">Confirm New Password</label>
+                        <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md" />
+                    </div>
+                    <button type="submit" className="px-4 py-2 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700">Update Password</button>
+                </form>
+            </div>
+
+            <div className="bg-red-50 p-6 rounded-lg border border-red-200">
+                <h2 className="text-xl font-semibold mb-2 text-red-800">Delete Account</h2>
+                <p className="text-red-700 mb-4">This action is irreversible. All your data will be permanently deleted.</p>
+                <button onClick={() => setShowDeleteModal(true)} className="px-4 py-2 font-semibold text-white bg-red-600 rounded-md hover:bg-red-700">Delete My Account</button>
+            </div>
+            
+            {success && <p className="text-green-500 text-sm mt-4">{success}</p>}
+            {error && <p className="text-red-500 text-sm mt-4">{error}</p>}
+
+            <ConfirmationModal
+                isOpen={showDeleteModal}
+                onClose={() => setShowDeleteModal(false)}
+                onConfirm={handleDeleteAccount}
+                title="Confirm Account Deletion"
+            >
+                <p>Are you sure you want to permanently delete your account? To confirm, please enter your password.</p>
+                <input 
+                    type="password" 
+                    value={deletePassword}
+                    onChange={e => setDeletePassword(e.target.value)}
+                    className="w-full px-3 py-2 mt-4 text-slate-900 bg-slate-100 border border-slate-300 rounded-md"
+                    placeholder="Enter your password"
+                />
+            </ConfirmationModal>
+        </div>
     );
 }
