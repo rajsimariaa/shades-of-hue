@@ -65,7 +65,7 @@ export default function App() {
                 const userDocRef = doc(db, 'users', currentUser.uid);
                 const userDocSnap = await getDoc(userDocRef);
                 if (userDocSnap.exists()) {
-                    const fetchedUserData = userDocSnap.data();
+                    const fetchedUserData = { id: currentUser.uid, ...userDocSnap.data() };
                     if (fetchedUserData.status === 'deactivated') {
                         setUserData(null);
                         await signOut(auth);
@@ -656,16 +656,13 @@ function OrganizationDashboard({ user, userData }) {
     const [selectedRequest, setSelectedRequest] = useState(null);
     const [declineReason, setDeclineReason] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
     useEffect(() => {
         if (!user) return;
-        let q;
-        if (view === 'pending') {
-            q = query(collection(db, "requests"), where("status", "==", "pending"), where("selectedOrg", "==", user.uid));
-        } else {
-            q = query(collection(db, "requests"), where("actionedByOrgId", "==", user.uid));
-        }
-
+        
+        const q = query(collection(db, "requests"), where("selectedOrg", "==", user.uid));
+        
         const unsubscribe = onSnapshot(q, (querySnapshot) => {
             const fetchedRequests = [];
             querySnapshot.forEach((doc) => {
@@ -677,7 +674,7 @@ function OrganizationDashboard({ user, userData }) {
             console.error("Error fetching org requests:", err);
         });
         return () => unsubscribe();
-    }, [user, view]);
+    }, [user]);
 
     const handleAccept = async (reqId) => {
         const reqRef = doc(db, 'requests', reqId);
@@ -723,6 +720,12 @@ function OrganizationDashboard({ user, userData }) {
             default: return 'bg-gray-100 text-gray-800';
         }
     };
+    
+    const displayedRequests = requests.filter(req => {
+        if (view === 'pending') return req.status === 'pending';
+        if (view === 'actioned') return req.status === 'accepted' || req.status === 'declined';
+        return false;
+    });
 
     return (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 animate-fadeIn">
@@ -748,16 +751,26 @@ function OrganizationDashboard({ user, userData }) {
 
             {view === 'profile' ? (
                 <div className="bg-white p-6 rounded-lg shadow-lg">
-                    <h2 className="text-xl font-semibold mb-4 text-slate-900">Services We Offer</h2>
-                    <ul className="list-disc list-inside space-y-2">
-                        {userData?.services?.map(service => <li key={service} className="text-slate-600">{service}</li>)}
-                    </ul>
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-xl font-semibold text-slate-900">My Profile</h2>
+                        <button onClick={() => setIsProfileModalOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700">
+                            <Edit size={16} /> Edit Profile
+                        </button>
+                    </div>
+                    <div>
+                        <h3 className="font-semibold text-slate-800">Organization Name</h3>
+                        <p className="text-slate-600 mb-4">{userData?.orgName}</p>
+                        <h3 className="font-semibold text-slate-800">Services We Offer</h3>
+                        <ul className="list-disc list-inside space-y-2 mt-2">
+                            {userData?.services?.map(service => <li key={service} className="text-slate-600">{service}</li>)}
+                        </ul>
+                    </div>
                 </div>
             ) : view === 'account' ? (
                 <MyAccountPage user={user} userData={userData} />
             ) : (
                 <div className="space-y-4">
-                    {requests.length > 0 ? requests.map(req => (
+                    {displayedRequests.length > 0 ? displayedRequests.map(req => (
                         <div key={req.id} className="bg-white p-4 rounded-lg shadow-md">
                             <div className="flex justify-between items-start mb-2">
                                  <div>
@@ -783,7 +796,7 @@ function OrganizationDashboard({ user, userData }) {
                              {req.status === 'accepted' && (
                                 <div className="mt-4 border-t border-slate-200 pt-2 flex items-center gap-2">
                                     <label className="text-sm font-medium">Progress:</label>
-                                    <select value={req.progress || 'Not Started'} onChange={e => handleProgressChange(req.id, e.target.value)} className="bg-slate-100 border-slate-300 rounded p-1 text-sm">
+                                    <select value={req.progress || 'Not Started'} onChange={e => handleProgressChange(req.id, e.target.value)} className="bg-slate-100 border border-slate-300 rounded p-1 text-sm">
                                         <option>Not Started</option>
                                         <option>In Progress</option>
                                         <option>Completed</option>
@@ -821,6 +834,7 @@ function OrganizationDashboard({ user, userData }) {
                     </div>
                 </div>
             )}
+            {isProfileModalOpen && <EditOrgServicesModal org={userData} onClose={() => setIsProfileModalOpen(false)} onUpdate={async (id, name, services) => { await updateDoc(doc(db, 'users', id), { name, orgName: name, services }); setIsProfileModalOpen(false); }} />}
         </div>
     );
 }
@@ -1442,7 +1456,7 @@ function TestimonialsSection() {
                 <div className="mt-12 grid gap-8 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
                     {testimonials.map(t => (
                         <div key={t.id} className="bg-slate-50 p-8 rounded-lg shadow-lg border border-slate-200">
-                            <p className="text-slate-700 italic">"{t.text}"</p>
+                            <p className="italic text-slate-700">"{t.text}"</p>
                             <p className="mt-6 font-semibold text-sky-600">- {t.userName}</p>
                         </div>
                     ))}
@@ -1528,6 +1542,7 @@ function PaymentModal({ onClose, onSubmit }) {
 }
 
 function EditOrgServicesModal({ org, onClose, onUpdate }) {
+    const [name, setName] = useState(org.orgName || '');
     const [services, setServices] = useState(org.services || []);
 
     const handleServiceChange = (service) => {
@@ -1537,21 +1552,30 @@ function EditOrgServicesModal({ org, onClose, onUpdate }) {
     };
 
     const handleSave = () => {
-        onUpdate(org.id, services);
+        onUpdate(org.id, name, services);
     };
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-50 animate-fadeIn">
             <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-md mx-4 relative">
                 <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X size={24} /></button>
-                <h2 className="text-2xl font-bold mb-4 text-slate-900">Edit Services for {org.orgName}</h2>
-                <div className="grid grid-cols-2 gap-4">
-                    {helpCategories.map(cat => (
-                        <label key={cat} className="flex items-center space-x-2">
-                            <input type="checkbox" checked={services.includes(cat)} onChange={() => handleServiceChange(cat)} className="h-4 w-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500" />
-                            <span className="text-sm text-slate-600">{cat}</span>
-                        </label>
-                    ))}
+                <h2 className="text-2xl font-bold mb-4 text-slate-900">Edit Profile</h2>
+                 <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700">Organization Name</label>
+                        <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">Services Offered</label>
+                        <div className="grid grid-cols-2 gap-2">
+                            {helpCategories.map(cat => (
+                                <label key={cat} className="flex items-center space-x-2">
+                                    <input type="checkbox" checked={services.includes(cat)} onChange={() => handleServiceChange(cat)} className="h-4 w-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500" />
+                                    <span className="text-sm text-slate-600">{cat}</span>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
                 </div>
                 <div className="flex justify-end gap-4 mt-8">
                     <button onClick={onClose} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-md text-sm font-semibold">Cancel</button>
