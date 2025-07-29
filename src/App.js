@@ -29,7 +29,6 @@ import {
 import { ArrowRight, User, Building, Shield, LogOut, Heart, Menu, X, DollarSign, UserCog, MessageSquare, CheckCircle, Clock, Edit, BarChart2, KeyRound, Trash2 } from 'lucide-react';
 
 // --- IMPORTANT: Firebase Configuration ---
-// Paste your Firebase project configuration object here.
 const firebaseConfig = {
   apiKey: "AIzaSyBaD5A7TsVFhwhumQFILePvYTtEdK1OyB4",
   authDomain: "shades-of-hue-2025.firebaseapp.com",
@@ -43,10 +42,8 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-// Note: Firebase Storage is not used in this version.
 
 const helpCategories = ["Mental Health Support", "Legal Advice", "Community Connection", "Housing Assistance", "Healthcare Services", "Employment", "General Inquiry"];
-
 
 // --- Main App Component ---
 export default function App() {
@@ -56,29 +53,34 @@ export default function App() {
     const [loading, setLoading] = useState(true);
     const [isNavOpen, setIsNavOpen] = useState(false);
 
-    // --- Authentication State Observer ---
+    // --- Authentication State Observer & Page Setup ---
     useEffect(() => {
+        document.title = "Shades of Hue";
+        const favicon = document.createElement('link');
+        favicon.rel = 'icon';
+        favicon.href = 'https://t3.ftcdn.net/jpg/05/65/11/20/360_F_565112089_c9ZdpGCr7HpjM03Nm1lamTWATl3qDRh3.jpg';
+        document.head.appendChild(favicon);
+
         const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
             setLoading(true);
-            if (currentUser && !currentUser.isAnonymous) {
-                setUser(currentUser);
+            if (currentUser) {
                 const userDocRef = doc(db, 'users', currentUser.uid);
                 const userDocSnap = await getDoc(userDocRef);
                 if (userDocSnap.exists()) {
                     const fetchedUserData = { id: currentUser.uid, ...userDocSnap.data() };
                     if (fetchedUserData.status === 'deactivated') {
-                        setUserData(null);
                         await signOut(auth);
-                        setPage('login');
                     } else {
+                        setUser(currentUser);
                         setUserData(fetchedUserData);
                     }
                 } else {
-                    setUserData(null);
+                     await signOut(auth);
                 }
             } else {
-                setUser(currentUser); 
+                setUser(null);
                 setUserData(null);
+                setPage('home');
             }
             setLoading(false);
         });
@@ -87,7 +89,6 @@ export default function App() {
 
     const handleLogout = async () => {
         await signOut(auth);
-        setPage('home');
     };
     
     const renderPage = () => {
@@ -95,12 +96,18 @@ export default function App() {
             return <div className="flex justify-center items-center h-screen bg-slate-50 text-slate-800">Loading...</div>;
         }
 
+        if (user && userData) {
+             switch (userData.role) {
+                case 'admin': return <AdminDashboard user={user} userData={userData} />;
+                case 'organization': return <OrganizationDashboard user={user} userData={userData} />;
+                case 'user': return <UserDashboard user={user} userData={userData} />;
+                default: return <HomePage setPage={setPage} />;
+            }
+        }
+
         switch (page) {
             case 'login': return <LoginPage setPage={setPage} />;
             case 'signup': return <SignUpPage setPage={setPage} />;
-            case 'userDashboard': return <UserDashboard user={user} userData={userData} />;
-            case 'orgDashboard': return <OrganizationDashboard user={user} userData={userData} />;
-            case 'adminDashboard': return <AdminDashboard user={user} userData={userData} />;
             default: return <HomePage setPage={setPage} />;
         }
     };
@@ -119,7 +126,7 @@ function Navbar({ user, userData, setPage, handleLogout, isNavOpen, setIsNavOpen
         { name: 'Home', page: 'home' },
     ];
     
-    const isLoggedIn = user && !user.isAnonymous;
+    const isLoggedIn = user && userData;
     const [isDonationModalOpen, setIsDonationModalOpen] = useState(false);
 
     const handleDonateClick = () => {
@@ -286,19 +293,8 @@ function LoginPage({ setPage }) {
         e.preventDefault();
         setError('');
         try {
-            const userCredential = await signInWithEmailAndPassword(auth, email, password);
-            const user = userCredential.user;
-            
-            const userDocRef = doc(db, 'users', user.uid);
-            const userDocSnap = await getDoc(userDocRef);
-            if (userDocSnap.exists()) {
-                const userData = userDocSnap.data();
-                if (userData.role === 'admin') setPage('adminDashboard');
-                else if (userData.role === 'organization') setPage('orgDashboard');
-                else setPage('userDashboard');
-            } else {
-                setPage('home'); 
-            }
+            // The onAuthStateChanged listener in App will handle redirection
+            await signInWithEmailAndPassword(auth, email, password);
         } catch (err) {
             console.error(err.code, err.message);
             if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
@@ -358,9 +354,7 @@ function SignUpPage({ setPage }) {
 
             await setDoc(doc(db, 'users', user.uid), userData);
 
-            if (userData.role === 'admin') setPage('adminDashboard');
-            else setPage('userDashboard');
-
+            // The onAuthStateChanged listener in App will handle redirection
         } catch (err) {
             console.error(err.code, err.message);
             if (err.code === 'auth/email-already-in-use') {
@@ -445,13 +439,14 @@ function UserRequestDashboard({ user, userData }) {
     const [description, setDescription] = useState('');
     const [error, setError] = useState('');
     const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [requestToDelete, setRequestToDelete] = useState(null);
 
     useEffect(() => {
         const orgsQuery = query(collection(db, "users"), where("role", "==", "organization"), where("status", "==", "active"));
         const unsubscribe = onSnapshot(orgsQuery, (snapshot) => {
             const allOrgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setOrganizations(allOrgs);
-            setFilteredOrgs(allOrgs); // Initially show all orgs
+            setFilteredOrgs(allOrgs);
         });
         return () => unsubscribe();
     }, []);
@@ -507,6 +502,20 @@ function UserRequestDashboard({ user, userData }) {
         }
     };
 
+    const openDeleteRequestModal = (request) => {
+        setRequestToDelete(request);
+    };
+
+    const confirmDeleteRequest = async () => {
+        if (!requestToDelete) return;
+        try {
+            await deleteDoc(doc(db, "requests", requestToDelete.id));
+            setRequestToDelete(null);
+        } catch (err) {
+            console.error("Error deleting request:", err);
+        }
+    };
+
     const getStatusChip = (status) => {
         switch (status) {
             case 'pending_payment_approval': return 'bg-orange-100 text-orange-800';
@@ -517,6 +526,8 @@ function UserRequestDashboard({ user, userData }) {
             default: return 'bg-gray-100 text-gray-800';
         }
     };
+
+    const selectedOrgData = organizations.find(org => org.id === selectedOrg);
 
     return (
         <>
@@ -533,6 +544,12 @@ function UserRequestDashboard({ user, userData }) {
                                 <option value="" disabled>Choose an organization...</option>
                                 {filteredOrgs.length > 0 ? filteredOrgs.map(org => <option key={org.id} value={org.id}>{org.orgName}</option>) : <option disabled>No organizations offer this service</option>}
                             </select>
+                            {selectedOrgData && selectedOrgData.description && (
+                                <div className="p-3 bg-sky-50 border border-sky-200 rounded-md text-sm text-sky-800">
+                                    <h4 className="font-semibold mb-1">About {selectedOrgData.orgName}</h4>
+                                    <p>{selectedOrgData.description}</p>
+                                </div>
+                            )}
                             <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe the help you need..." rows="5" required className="w-full px-3 py-2 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
                             {error && <p className="text-red-500 text-sm">{error}</p>}
                             <button type="submit" className="w-full py-2 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700 transition-colors">Proceed to Payment</button>
@@ -553,7 +570,14 @@ function UserRequestDashboard({ user, userData }) {
                                         </div>
                                         <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusChip(req.status)}`}>{req.status.replace(/_/g, ' ')}</span>
                                     </div>
-                                    <p className="text-xs text-slate-400 mt-2">{req.createdAt.toDate().toLocaleString()}</p>
+                                    <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-200">
+                                        <p className="text-xs text-slate-400">{req.createdAt.toDate().toLocaleString()}</p>
+                                        {(req.status === 'pending_payment_approval' || req.status === 'payment_rejected' || req.status === 'pending') && (
+                                            <button onClick={() => openDeleteRequestModal(req)} className="text-red-500 hover:text-red-700 text-xs font-semibold flex items-center gap-1">
+                                                <Trash2 size={14} /> Delete
+                                            </button>
+                                        )}
+                                    </div>
                                     {req.status === 'payment_rejected' && req.rejectionReason && (<div className="mt-2 p-3 bg-red-100 rounded-md"><p className="text-sm font-semibold text-red-800">Rejection Reason:</p><p className="text-sm text-red-700">{req.rejectionReason}</p></div>)}
                                     {req.status === 'declined' && req.declineReason && (<div className="mt-2 p-3 bg-red-100 rounded-md"><p className="text-sm font-semibold text-red-800">Reason for Decline:</p><p className="text-sm text-red-700">{req.declineReason}</p></div>)}
                                     {req.status === 'accepted' && (<div className="mt-2 p-3 bg-green-100 rounded-md"><p className="text-sm font-semibold text-green-800">Accepted by:</p><p className="text-sm text-green-700">{req.orgName}</p></div>)}
@@ -564,16 +588,24 @@ function UserRequestDashboard({ user, userData }) {
                 </div>
             </div>
             {showPaymentModal && <PaymentModal onClose={() => setShowPaymentModal(false)} onSubmit={handleRequestSubmit} />}
+            <ConfirmationModal
+                isOpen={!!requestToDelete}
+                onClose={() => setRequestToDelete(null)}
+                onConfirm={confirmDeleteRequest}
+                title="Confirm Request Deletion"
+            >
+                <p>Are you sure you want to delete this help request? This action cannot be undone.</p>
+            </ConfirmationModal>
         </>
     );
 }
 
 function UserTestimonialsDashboard({ user, userData }) {
-    // ... This component remains unchanged ...
     const [testimonialText, setTestimonialText] = useState('');
     const [myTestimonials, setMyTestimonials] = useState([]);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
+    const [testimonialToDelete, setTestimonialToDelete] = useState(null);
 
     useEffect(() => {
         if (!user) return;
@@ -609,6 +641,20 @@ function UserTestimonialsDashboard({ user, userData }) {
         }
     };
     
+    const openDeleteTestimonialModal = (testimonial) => {
+        setTestimonialToDelete(testimonial);
+    };
+
+    const confirmDeleteTestimonial = async () => {
+        if (!testimonialToDelete) return;
+        try {
+            await deleteDoc(doc(db, "testimonials", testimonialToDelete.id));
+            setTestimonialToDelete(null);
+        } catch (err) {
+            console.error("Error deleting testimonial:", err);
+        }
+    };
+
     const getStatusChip = (status) => {
         switch (status) {
             case 'pending': return 'bg-yellow-100 text-yellow-800';
@@ -618,35 +664,50 @@ function UserTestimonialsDashboard({ user, userData }) {
     };
 
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-1">
-                <div className="bg-white p-6 rounded-lg shadow-lg">
-                    <h2 className="text-xl font-semibold mb-4 text-slate-900">Share Your Story</h2>
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                        <textarea value={testimonialText} onChange={(e) => setTestimonialText(e.target.value)} placeholder="Share your positive experience with our community..." rows="8" required className="w-full px-3 py-2 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
-                        {error && <p className="text-red-500 text-sm">{error}</p>}
-                        {success && <p className="text-green-500 text-sm">{success}</p>}
-                        <button type="submit" className="w-full py-2 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700 transition-colors">Submit Testimonial</button>
-                    </form>
+        <>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div className="lg:col-span-1">
+                    <div className="bg-white p-6 rounded-lg shadow-lg">
+                        <h2 className="text-xl font-semibold mb-4 text-slate-900">Share Your Story</h2>
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <textarea value={testimonialText} onChange={(e) => setTestimonialText(e.target.value)} placeholder="Share your positive experience with our community..." rows="8" required className="w-full px-3 py-2 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
+                            {error && <p className="text-red-500 text-sm">{error}</p>}
+                            {success && <p className="text-green-500 text-sm">{success}</p>}
+                            <button type="submit" className="w-full py-2 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700 transition-colors">Submit Testimonial</button>
+                        </form>
+                    </div>
                 </div>
-            </div>
-            <div className="lg:col-span-2">
-                 <div className="bg-white p-6 rounded-lg shadow-lg">
-                    <h2 className="text-xl font-semibold mb-4 text-slate-900">My Submitted Testimonials</h2>
-                    <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
-                        {myTestimonials.length > 0 ? myTestimonials.map(t => (
-                            <div key={t.id} className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-                                <div className="flex justify-between items-start">
-                                    <p className="text-slate-700 italic">"{t.text}"</p>
-                                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusChip(t.status)}`}>{t.status}</span>
+                <div className="lg:col-span-2">
+                     <div className="bg-white p-6 rounded-lg shadow-lg">
+                        <h2 className="text-xl font-semibold mb-4 text-slate-900">My Submitted Testimonials</h2>
+                        <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+                            {myTestimonials.length > 0 ? myTestimonials.map(t => (
+                                <div key={t.id} className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                                    <div className="flex justify-between items-start">
+                                        <p className="text-slate-700 italic">"{t.text}"</p>
+                                        <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusChip(t.status)}`}>{t.status}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-200">
+                                        <p className="text-xs text-slate-400">{t.createdAt.toDate().toLocaleString()}</p>
+                                        <button onClick={() => openDeleteTestimonialModal(t)} className="text-red-500 hover:text-red-700 text-xs font-semibold flex items-center gap-1">
+                                            <Trash2 size={14} /> Delete
+                                        </button>
+                                    </div>
                                 </div>
-                                <p className="text-xs text-slate-400 mt-2">{t.createdAt.toDate().toLocaleString()}</p>
-                            </div>
-                        )) : (<p className="text-slate-500">You have not submitted any testimonials yet.</p>)}
+                            )) : (<p className="text-slate-500">You have not submitted any testimonials yet.</p>)}
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
+            <ConfirmationModal
+                isOpen={!!testimonialToDelete}
+                onClose={() => setTestimonialToDelete(null)}
+                onConfirm={confirmDeleteTestimonial}
+                title="Confirm Testimonial Deletion"
+            >
+                <p>Are you sure you want to delete this testimonial? This action cannot be undone.</p>
+            </ConfirmationModal>
+        </>
     );
 }
 
@@ -760,6 +821,8 @@ function OrganizationDashboard({ user, userData }) {
                     <div>
                         <h3 className="font-semibold text-slate-800">Organization Name</h3>
                         <p className="text-slate-600 mb-4">{userData?.orgName}</p>
+                        <h3 className="font-semibold text-slate-800">Description</h3>
+                        <p className="text-slate-600 mb-4">{userData?.description || 'No description provided.'}</p>
                         <h3 className="font-semibold text-slate-800">Services We Offer</h3>
                         <ul className="list-disc list-inside space-y-2 mt-2">
                             {userData?.services?.map(service => <li key={service} className="text-slate-600">{service}</li>)}
@@ -834,7 +897,7 @@ function OrganizationDashboard({ user, userData }) {
                     </div>
                 </div>
             )}
-            {isProfileModalOpen && <EditOrgServicesModal org={userData} onClose={() => setIsProfileModalOpen(false)} onUpdate={async (id, name, services) => { await updateDoc(doc(db, 'users', id), { name, orgName: name, services }); setIsProfileModalOpen(false); }} />}
+            {isProfileModalOpen && <EditOrgServicesModal org={userData} onClose={() => setIsProfileModalOpen(false)} onUpdate={async (id, name, services, description) => { await updateDoc(doc(db, 'users', id), { name, orgName: name, services, description }); setIsProfileModalOpen(false); }} />}
         </div>
     );
 }
@@ -887,8 +950,7 @@ function AdminDashboard({ user, userData }) {
     const confirmDeactivate = async () => {
         if (!modalState.id) return;
         try {
-            const userRef = doc(db, 'users', modalState.id);
-            await updateDoc(userRef, { status: 'deactivated' });
+            await updateDoc(doc(db, 'users', modalState.id), { status: 'deactivated' });
             console.log('Profile deactivated.');
         } catch (error) {
             console.error("Error deactivating profile:", error);
@@ -1541,6 +1603,7 @@ function PaymentModal({ onClose, onSubmit }) {
 function EditOrgServicesModal({ org, onClose, onUpdate }) {
     const [name, setName] = useState(org.orgName || '');
     const [services, setServices] = useState(org.services || []);
+    const [description, setDescription] = useState(org.description || '');
 
     const handleServiceChange = (service) => {
         setServices(prev => 
@@ -1549,7 +1612,7 @@ function EditOrgServicesModal({ org, onClose, onUpdate }) {
     };
 
     const handleSave = () => {
-        onUpdate(org.id, name, services);
+        onUpdate(org.id, name, services, description);
     };
 
     return (
@@ -1561,6 +1624,10 @@ function EditOrgServicesModal({ org, onClose, onUpdate }) {
                     <div>
                         <label className="block text-sm font-medium text-slate-700">Organization Name</label>
                         <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700">Description</label>
+                        <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows="4" className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-slate-700 mb-2">Services Offered</label>
@@ -1630,8 +1697,7 @@ function MyAccountPage({ user, userData }) {
         setError('');
         setSuccess('');
         try {
-            const userRef = doc(db, 'users', user.uid);
-            await updateDoc(userRef, { name: name });
+            await updateDoc(doc(db, 'users', user.uid), { name: name });
             setSuccess('Your details have been updated successfully.');
         } catch (err) {
             setError('Failed to update details. Please try again.');
@@ -1669,6 +1735,7 @@ function MyAccountPage({ user, userData }) {
         try {
             const credential = EmailAuthProvider.credential(user.email, deletePassword);
             await reauthenticateWithCredential(user, credential);
+            await deleteDoc(doc(db, 'users', user.uid));
             await deleteUser(user);
             // The onAuthStateChanged listener will handle logout and page redirect.
         } catch (err) {
