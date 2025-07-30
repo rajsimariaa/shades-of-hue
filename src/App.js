@@ -56,10 +56,15 @@ export default function App() {
     // --- Authentication State Observer & Page Setup ---
     useEffect(() => {
         document.title = "Shades of Hue";
-        const favicon = document.createElement('link');
-        favicon.rel = 'icon';
-        favicon.href = 'https://t3.ftcdn.net/jpg/05/65/11/20/360_F_565112089_c9ZdpGCr7HpjM03Nm1lamTWATl3qDRh3.jpg';
-        document.head.appendChild(favicon);
+        const favicon = document.querySelector("link[rel~='icon']");
+        if (favicon) {
+            favicon.href = 'https://img.freepik.com/free-vector/lgbt-pride-month-rainbow-heart-background_1017-38228.jpg';
+        } else {
+            const newFavicon = document.createElement('link');
+            newFavicon.rel = 'icon';
+            newFavicon.href = 'https://img.freepik.com/free-vector/lgbt-pride-month-rainbow-heart-background_1017-38228.jpg';
+            document.head.appendChild(newFavicon);
+        }
 
         const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
             setLoading(true);
@@ -1248,9 +1253,7 @@ function RequestLog({ requests }) {
                                 <p className="font-semibold text-sky-600">{req.helpType}</p>
                                 <p className="text-slate-700 mt-2 flex-1 pr-4">{req.requestText}</p>
                             </div>
-                            <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusChip(req.status)}`}>
-                                {req.status}
-                            </span>
+                            <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusChip(req.status)}`}>{req.status}</span>
                         </div>
                         <div className="text-xs text-slate-500 space-y-1 border-t border-slate-200 pt-2 mt-2">
                             <p>User: {req.userName}</p>
