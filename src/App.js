@@ -549,12 +549,6 @@ function UserRequestDashboard({ user, userData }) {
                                 <option value="" disabled>Choose an organization...</option>
                                 {filteredOrgs.length > 0 ? filteredOrgs.map(org => <option key={org.id} value={org.id}>{org.orgName}</option>) : <option disabled>No organizations offer this service</option>}
                             </select>
-                            {selectedOrgData && selectedOrgData.description && (
-                                <div className="p-3 bg-sky-50 border border-sky-200 rounded-md text-sm text-sky-800">
-                                    <h4 className="font-semibold mb-1">About {selectedOrgData.orgName}</h4>
-                                    <p>{selectedOrgData.description}</p>
-                                </div>
-                            )}
                             <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe the help you need..." rows="5" required className="w-full px-3 py-2 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
                             {error && <p className="text-red-500 text-sm">{error}</p>}
                             <button type="submit" className="w-full py-2 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700 transition-colors">Proceed to Payment</button>
@@ -826,8 +820,6 @@ function OrganizationDashboard({ user, userData }) {
                     <div>
                         <h3 className="font-semibold text-slate-800">Organization Name</h3>
                         <p className="text-slate-600 mb-4">{userData?.orgName}</p>
-                        <h3 className="font-semibold text-slate-800">Description</h3>
-                        <p className="text-slate-600 mb-4">{userData?.description || 'No description provided.'}</p>
                         <h3 className="font-semibold text-slate-800">Services We Offer</h3>
                         <ul className="list-disc list-inside space-y-2 mt-2">
                             {userData?.services?.map(service => <li key={service} className="text-slate-600">{service}</li>)}
@@ -902,7 +894,7 @@ function OrganizationDashboard({ user, userData }) {
                     </div>
                 </div>
             )}
-            {isProfileModalOpen && <EditOrgServicesModal org={userData} onClose={() => setIsProfileModalOpen(false)} onUpdate={async (id, name, services, description) => { await updateDoc(doc(db, 'users', id), { name, orgName: name, services, description }); setIsProfileModalOpen(false); }} />}
+            {isProfileModalOpen && <EditOrgServicesModal org={userData} onUpdate={async (id, name, services) => { await updateDoc(doc(db, 'users', id), { name, orgName: name, services }); setIsProfileModalOpen(false); }} onClose={() => setIsProfileModalOpen(false)} />}
         </div>
     );
 }
@@ -1606,7 +1598,6 @@ function PaymentModal({ onClose, onSubmit }) {
 function EditOrgServicesModal({ org, onClose, onUpdate }) {
     const [name, setName] = useState(org.orgName || '');
     const [services, setServices] = useState(org.services || []);
-    const [description, setDescription] = useState(org.description || '');
 
     const handleServiceChange = (service) => {
         setServices(prev => 
@@ -1615,7 +1606,7 @@ function EditOrgServicesModal({ org, onClose, onUpdate }) {
     };
 
     const handleSave = () => {
-        onUpdate(org.id, name, services, description);
+        onUpdate(org.id, name, services);
     };
 
     return (
@@ -1627,10 +1618,6 @@ function EditOrgServicesModal({ org, onClose, onUpdate }) {
                     <div>
                         <label className="block text-sm font-medium text-slate-700">Organization Name</label>
                         <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-700">Description</label>
-                        <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows="4" className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-slate-700 mb-2">Services Offered</label>
