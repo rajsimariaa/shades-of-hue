@@ -1148,9 +1148,9 @@ function OrgManagementTable({ orgs, onDeactivate }) {
         setEditingOrg(org);
     };
 
-    const handleUpdateServices = async (orgId, newServices) => {
+    const handleUpdateServices = async (orgId, name, newServices) => {
         const docRef = doc(db, 'users', orgId);
-        await updateDoc(docRef, { services: newServices });
+        await updateDoc(docRef, { name: name, orgName: name, services: newServices });
         setEditingOrg(null);
     };
 
@@ -1173,7 +1173,7 @@ function OrgManagementTable({ orgs, onDeactivate }) {
                             <tr key={org.id} className="border-b border-slate-200 hover:bg-slate-50">
                                 <td className="px-6 py-4">{org.orgName}</td>
                                 <td className="px-6 py-4">{org.email}</td>
-                                <td className="px-6 py-4 text-xs">{(org.services || []).join(', ')}</td>
+                                <td className="px-6 py-4 text-xs">{(Array.isArray(org.services) ? org.services : []).join(', ')}</td>
                                 <td className="px-6 py-4 flex gap-4">
                                     <button onClick={() => handleEdit(org)} className="font-medium text-sky-600 hover:underline"><Edit size={16} /></button>
                                     {org.status === 'active' && <button onClick={() => onDeactivate(org.id, org.orgName)} className="font-medium text-red-600 hover:underline">Deactivate</button>}
