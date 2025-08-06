@@ -1266,12 +1266,54 @@ function RequestLog({ requests }) {
 }
 
 function DonationLog({ donations }) {
-    const totalAmount = donations.reduce((sum, d) => sum + d.amount, 0);
-    const totalDonations = donations.length;
+    const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
+    const totalAmount = donations.reduce((sum, d) => d.status === 'Verified' ? sum + d.amount : sum, 0);
+    const totalDonations = donations.filter(d => d.status === 'Verified').length;
+
+    const handleApprove = async (id) => {
+        await updateDoc(doc(db, 'donations', id), { status: 'Verified' });
+    };
+
+    const handleReject = async (id) => {
+        await updateDoc(doc(db, 'donations', id), { status: 'Rejected' });
+    };
+    
+    const handleDeleteAllDonations = async () => {
+        const donationsCollection = collection(db, 'donations');
+        try {
+            const donationsSnapshot = await getDocs(donationsCollection);
+            const deletePromises = [];
+            donationsSnapshot.forEach((doc) => {
+                deletePromises.push(deleteDoc(doc.ref));
+            });
+            await Promise.all(deletePromises);
+        } catch (error) {
+            console.error("Error deleting all donations:", error);
+        } finally {
+            setShowDeleteAllModal(false);
+        }
+    };
+
+    const getStatusChip = (status) => {
+        switch (status) {
+            case 'Pending Verification': return 'bg-yellow-100 text-yellow-800';
+            case 'Verified': return 'bg-green-100 text-green-800';
+            case 'Rejected': return 'bg-red-100 text-red-800';
+            default: return 'bg-gray-100 text-gray-800';
+        }
+    };
 
     return (
         <div>
-            <h2 className="text-xl font-semibold mb-4 text-slate-900">Donation Tracking</h2>
+            <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold text-slate-900">Donation Tracking</h2>
+                <button 
+                    onClick={() => setShowDeleteAllModal(true)} 
+                    className="bg-red-600 text-white px-4 py-2 rounded-md text-sm font-semibold hover:bg-red-700 flex items-center gap-2"
+                >
+                    <Trash2 size={16} /> Delete All Donations
+                </button>
+            </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg flex items-center">
@@ -1279,7 +1321,7 @@ function DonationLog({ donations }) {
                         <DollarSign className="text-green-600" />
                     </div>
                     <div>
-                        <p className="text-sm text-slate-500">Total Raised</p>
+                        <p className="text-sm text-slate-500">Total Verified Donations</p>
                         <p className="text-2xl font-bold text-slate-900">₹{totalAmount.toFixed(2)}</p>
                     </div>
                 </div>
@@ -1288,7 +1330,7 @@ function DonationLog({ donations }) {
                         <Heart className="text-rose-600" />
                     </div>
                     <div>
-                        <p className="text-sm text-slate-500">Total Donations</p>
+                        <p className="text-sm text-slate-500">Verified Transactions</p>
                         <p className="text-2xl font-bold text-slate-900">{totalDonations}</p>
                     </div>
                 </div>
@@ -1298,24 +1340,45 @@ function DonationLog({ donations }) {
                 <table className="min-w-full text-sm text-left text-slate-600">
                     <thead className="bg-slate-100 text-xs uppercase">
                         <tr>
-                            <th className="px-6 py-3">Donor Name</th>
-                            <th className="px-6 py-3">Email</th>
+                            <th className="px-6 py-3">Donor</th>
                             <th className="px-6 py-3">Amount</th>
+                            <th className="px-6 py-3">Transaction ID</th>
                             <th className="px-6 py-3">Date</th>
+                            <th className="px-6 py-3">Status</th>
+                            <th className="px-6 py-3">Action</th>
                         </tr>
                     </thead>
                     <tbody>
                         {donations.map(d => (
                             <tr key={d.id} className="border-b border-slate-200 hover:bg-slate-50">
-                                <td className="px-6 py-4">{d.donorName || 'Anonymous'}</td>
-                                <td className="px-6 py-4">{d.donorEmail || 'N/A'}</td>
+                                <td className="px-6 py-4">{d.donorName || 'Anonymous'}<br/><span className="text-xs text-slate-400">{d.donorEmail}</span></td>
                                 <td className="px-6 py-4 font-semibold text-green-600">₹{d.amount.toFixed(2)}</td>
+                                <td className="px-6 py-4 font-mono text-xs">{d.transactionId}</td>
                                 <td className="px-6 py-4">{d.donatedAt.toDate().toLocaleString()}</td>
+                                <td className="px-6 py-4">
+                                    <span className={`px-2 py-1 rounded-full text-xs font-semibold ${getStatusChip(d.status)}`}>{d.status}</span>
+                                </td>
+                                <td className="px-6 py-4">
+                                    {d.status === 'Pending Verification' && (
+                                        <div className="flex gap-2">
+                                            <button onClick={() => handleApprove(d.id)} className="text-green-600 hover:text-green-800"><CheckCircle size={18} /></button>
+                                            <button onClick={() => handleReject(d.id)} className="text-red-600 hover:text-red-800"><X size={18} /></button>
+                                        </div>
+                                    )}
+                                </td>
                             </tr>
                         ))}
                     </tbody>
                 </table>
             </div>
+            <ConfirmationModal
+                isOpen={showDeleteAllModal}
+                onClose={() => setShowDeleteAllModal(false)}
+                onConfirm={handleDeleteAllDonations}
+                title="Confirm Deleting All Donations"
+            >
+                <p>Are you sure you want to delete ALL donation records? This action is irreversible and will remove both pending and verified donations.</p>
+            </ConfirmationModal>
         </div>
     );
 }
@@ -1415,30 +1478,62 @@ function ConfirmationModal({ isOpen, onClose, onConfirm, title, children }) {
 }
 
 function DonationModal({ isOpen, onClose }) {
+    const [step, setStep] = useState(1);
     const [amount, setAmount] = useState(250);
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
+    const [transactionId, setTransactionId] = useState('');
     const [error, setError] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [isSuccess, setIsSuccess] = useState(false);
 
-    const handleDonate = async (e) => {
+    const handleNext = (e) => {
         e.preventDefault();
-        if (amount <= 0) { setError('Please enter a valid amount.'); return; }
-        setError(''); setIsSubmitting(true);
+        if (amount <= 0) {
+            setError('Please enter a valid amount.');
+            return;
+        }
+        setError('');
+        setStep(2);
+    };
+
+    const handleFinalSubmit = async () => {
+        if (transactionId.trim() === '') {
+            setError('Please enter a valid Transaction ID.');
+            return;
+        }
+        setIsSubmitting(true);
+        setError('');
+
         try {
             await addDoc(collection(db, 'donations'), {
-                amount: Number(amount), donorName: name || 'Anonymous',
-                donorEmail: email || null, donatedAt: Timestamp.now(),
+                amount: Number(amount),
+                donorName: name || 'Anonymous',
+                donorEmail: email || null,
+                transactionId: transactionId,
+                donatedAt: Timestamp.now(),
+                status: 'Pending Verification'
             });
-            setIsSuccess(true);
-        } catch (err) { console.error("Error processing donation:", err); setError('Donation failed. Please try again.');
-        } finally { setIsSubmitting(false); }
+            setStep(3); // Go to success step
+        } catch (err) {
+            console.error("Error submitting donation for verification:", err);
+            setError('Submission failed. Please try again.');
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     const handleClose = () => {
         onClose();
-        setTimeout(() => { setIsSuccess(false); setAmount(250); setName(''); setEmail(''); setError(''); }, 300);
+        // Reset state after a delay to allow for closing animation
+        setTimeout(() => {
+            setStep(1);
+            setAmount(250);
+            setName('');
+            setEmail('');
+            setTransactionId('');
+            setError('');
+            setIsSubmitting(false);
+        }, 300);
     };
 
     if (!isOpen) return null;
@@ -1447,23 +1542,14 @@ function DonationModal({ isOpen, onClose }) {
         <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-50 animate-fadeIn">
             <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-md mx-4 relative">
                 <button onClick={handleClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X size={24} /></button>
-                {isSuccess ? (
-                    <div className="text-center">
-                        <Heart className="mx-auto text-rose-500 h-16 w-16 mb-4" />
-                        <h3 className="text-2xl font-bold mb-2 text-slate-900">Thank You!</h3>
-                        <p className="text-slate-600 mb-6">Your generous donation is greatly appreciated.</p>
-                        <button onClick={handleClose} className="w-full py-2 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700">Close</button>
-                    </div>
-                ) : (
+                
+                {step === 1 && (
                     <>
                         <h3 className="text-2xl font-bold mb-4 text-slate-900">Make a Donation</h3>
-                        <form onSubmit={handleDonate} className="space-y-4">
+                        <form onSubmit={handleNext} className="space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">Choose an amount</label>
-                                <div className="grid grid-cols-3 gap-2">
-                                    {[100, 250, 500].map(val => (<button key={val} type="button" onClick={() => setAmount(val)} className={`py-2 rounded-md font-semibold transition-colors ${amount === val ? 'bg-sky-600 text-white' : 'bg-slate-200 hover:bg-slate-300'}`}>₹{val}</button>))}
-                                </div>
-                                <div className="relative mt-4">
+                                <label className="block text-sm font-medium text-slate-700 mb-2">Enter donation amount</label>
+                                <div className="relative">
                                     <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">₹</span>
                                     <input type="number" value={amount} onChange={e => setAmount(e.target.value)} required className="w-full pl-7 pr-3 py-2 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
                                 </div>
@@ -1477,16 +1563,54 @@ function DonationModal({ isOpen, onClose }) {
                                 <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="For a receipt" className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" />
                             </div>
                             {error && <p className="text-red-500 text-sm">{error}</p>}
-                            <button type="submit" disabled={isSubmitting} className="w-full py-3 px-4 font-semibold text-white bg-rose-500 rounded-md hover:bg-rose-600 disabled:bg-slate-400 disabled:cursor-not-allowed flex justify-center items-center">
-                                {isSubmitting ? 'Processing...' : `Donate ₹${amount}`}
+                            <div className="text-center my-6">
+                                <p className="text-slate-500">Please pay to the UPI ID below:</p>
+                                <p className="font-mono text-lg font-semibold text-sky-600 tracking-wider">rajsimariaa-2@okaxis</p>
+                            </div>
+                            <button type="submit" className="w-full py-3 px-4 font-semibold text-white bg-rose-500 rounded-md hover:bg-rose-600">
+                                I Have Paid, Next Step
                             </button>
                         </form>
                     </>
+                )}
+
+                {step === 2 && (
+                     <div>
+                        <h2 className="text-2xl font-bold mb-4 text-slate-900">Confirm Your Donation</h2>
+                        <p className="text-slate-600 mb-4">Please provide the transaction ID to help us verify your donation of <strong className="text-slate-800">₹{amount}</strong>.</p>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700">Transaction ID</label>
+                                <input 
+                                    type="text" 
+                                    value={transactionId} 
+                                    onChange={e => setTransactionId(e.target.value)} 
+                                    required 
+                                    placeholder="Enter the UPI transaction ID"
+                                    className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500" 
+                                />
+                            </div>
+                            {error && <p className="text-red-500 text-sm">{error}</p>}
+                        </div>
+                         <button onClick={handleFinalSubmit} disabled={isSubmitting} className="w-full mt-8 py-2 px-4 font-semibold text-white bg-green-600 rounded-md hover:bg-green-700 disabled:bg-slate-400 disabled:cursor-not-allowed">
+                            {isSubmitting ? 'Submitting...' : 'Submit for Verification'}
+                        </button>
+                    </div>
+                )}
+                
+                {step === 3 && (
+                     <div className="text-center">
+                        <CheckCircle className="mx-auto text-green-500 h-16 w-16 mb-4" />
+                        <h3 className="text-2xl font-bold mb-2 text-slate-900">Thank You!</h3>
+                        <p className="text-slate-600 mb-6">Your donation has been submitted for verification. We appreciate your generous support!</p>
+                        <button onClick={handleClose} className="w-full py-2 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700">Close</button>
+                    </div>
                 )}
             </div>
         </div>
     );
 }
+
 
 function TestimonialsSection() {
     const [testimonials, setTestimonials] = useState([]);
