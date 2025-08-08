@@ -443,27 +443,27 @@ function UserRequestDashboard({ user, userData }) {
     const [helpType, setHelpType] = useState('');
     const [description, setDescription] = useState('');
     const [error, setError] = useState('');
+    const [successMessage, setSuccessMessage] = useState('');
     const [showPaymentModal, setShowPaymentModal] = useState(false);
-    const [requestToDelete, setRequestToDelete] = useState(null);
+    const [requestToCancel, setRequestToCancel] = useState(null);
 
     useEffect(() => {
         const orgsQuery = query(collection(db, "users"), where("role", "==", "organization"), where("status", "==", "active"));
         const unsubscribe = onSnapshot(orgsQuery, (snapshot) => {
             const allOrgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setOrganizations(allOrgs);
-            setFilteredOrgs(allOrgs);
-        });
+        }, (err) => console.error("Error fetching organizations:", err));
         return () => unsubscribe();
     }, []);
     
     useEffect(() => {
         if (helpType) {
-            const filtered = organizations.filter(org => org.services && org.services.includes(helpType));
+            const filtered = organizations.filter(org => Array.isArray(org.services) && org.services.includes(helpType));
             setFilteredOrgs(filtered);
         } else {
             setFilteredOrgs(organizations);
         }
-        setSelectedOrg(''); // Reset selected org when help type changes
+        setSelectedOrg('');
     }, [helpType, organizations]);
 
     useEffect(() => {
@@ -507,17 +507,21 @@ function UserRequestDashboard({ user, userData }) {
         }
     };
 
-    const openDeleteRequestModal = (request) => {
-        setRequestToDelete(request);
+    const openCancelRequestModal = (request) => {
+        setRequestToCancel(request);
     };
 
-    const confirmDeleteRequest = async () => {
-        if (!requestToDelete) return;
+    const confirmCancelRequest = async () => {
+        if (!requestToCancel) return;
         try {
-            await deleteDoc(doc(db, "requests", requestToDelete.id));
-            setRequestToDelete(null);
+            const reqRef = doc(db, "requests", requestToCancel.id);
+            await updateDoc(reqRef, { status: 'cancelled_by_user' });
+            setRequestToCancel(null);
+            setSuccessMessage('Your request has been cancelled. Your money will be credited to your bank account in 5-7 business days.');
+            setTimeout(() => setSuccessMessage(''), 7000);
         } catch (err) {
-            console.error("Error deleting request:", err);
+            console.error("Error canceling request:", err);
+            setError('Failed to cancel the request. Please try again.');
         }
     };
 
@@ -526,16 +530,21 @@ function UserRequestDashboard({ user, userData }) {
             case 'pending_payment_approval': return 'bg-orange-100 text-orange-800';
             case 'payment_rejected': return 'bg-red-100 text-red-800';
             case 'pending': return 'bg-yellow-100 text-yellow-800';
-            case 'accepted': return 'bg-green-100 text-green-800';
+            case 'accepted': return 'bg-blue-100 text-blue-800';
             case 'declined': return 'bg-red-100 text-red-800';
+            case 'cancelled_by_user': return 'bg-gray-200 text-gray-800';
             default: return 'bg-gray-100 text-gray-800';
         }
     };
 
-    const selectedOrgData = organizations.find(org => org.id === selectedOrg);
-
     return (
         <>
+            {successMessage && (
+                <div className="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 mb-6 rounded-lg" role="alert">
+                    <p className="font-bold">Success</p>
+                    <p>{successMessage}</p>
+                </div>
+            )}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-1">
                     <div className="bg-white p-6 rounded-lg shadow-lg">
@@ -559,7 +568,9 @@ function UserRequestDashboard({ user, userData }) {
                      <div className="bg-white p-6 rounded-lg shadow-lg">
                         <h2 className="text-xl font-semibold mb-4 text-slate-900">My Requests</h2>
                         <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
-                            {requests.length > 0 ? requests.map(req => (
+                            {requests.length > 0 ? requests.map(req => {
+                                const canCancel = req.status === 'accepted' && (req.progress === 'Not Started' || req.progress === 'In Progress');
+                                return (
                                 <div key={req.id} className="bg-slate-50 p-4 rounded-lg border border-slate-200">
                                     <div className="flex justify-between items-start">
                                         <div>
@@ -569,31 +580,35 @@ function UserRequestDashboard({ user, userData }) {
                                         </div>
                                         <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusChip(req.status)}`}>{req.status.replace(/_/g, ' ')}</span>
                                     </div>
+                                    {req.status === 'accepted' && (
+                                        <div className="mt-2 pt-2 border-t border-slate-200">
+                                            <p className="text-sm font-semibold text-slate-800">Progress: <span className="font-normal text-blue-700">{req.progress}</span></p>
+                                        </div>
+                                    )}
                                     <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-200">
                                         <p className="text-xs text-slate-400">{req.createdAt.toDate().toLocaleString()}</p>
-                                        {(req.status === 'pending_payment_approval' || req.status === 'payment_rejected' || req.status === 'pending') && (
-                                            <button onClick={() => openDeleteRequestModal(req)} className="text-red-500 hover:text-red-700 text-xs font-semibold flex items-center gap-1">
-                                                <Trash2 size={14} /> Delete
+                                        {canCancel && (
+                                            <button onClick={() => openCancelRequestModal(req)} className="text-red-500 hover:text-red-700 text-xs font-semibold flex items-center gap-1">
+                                                <Trash2 size={14} /> Cancel Request
                                             </button>
                                         )}
                                     </div>
                                     {req.status === 'payment_rejected' && req.rejectionReason && (<div className="mt-2 p-3 bg-red-100 rounded-md"><p className="text-sm font-semibold text-red-800">Rejection Reason:</p><p className="text-sm text-red-700">{req.rejectionReason}</p></div>)}
                                     {req.status === 'declined' && req.declineReason && (<div className="mt-2 p-3 bg-red-100 rounded-md"><p className="text-sm font-semibold text-red-800">Reason for Decline:</p><p className="text-sm text-red-700">{req.declineReason}</p></div>)}
-                                    {req.status === 'accepted' && (<div className="mt-2 p-3 bg-green-100 rounded-md"><p className="text-sm font-semibold text-green-800">Accepted by:</p><p className="text-sm text-green-700">{req.orgName}</p></div>)}
                                 </div>
-                            )) : (<p className="text-slate-500">You have no submitted requests.</p>)}
+                            )}) : (<p className="text-slate-500">You have no submitted requests.</p>)}
                         </div>
                     </div>
                 </div>
             </div>
             {showPaymentModal && <PaymentModal onClose={() => setShowPaymentModal(false)} onSubmit={handleRequestSubmit} />}
             <ConfirmationModal
-                isOpen={!!requestToDelete}
-                onClose={() => setRequestToDelete(null)}
-                onConfirm={confirmDeleteRequest}
-                title="Confirm Request Deletion"
+                isOpen={!!requestToCancel}
+                onClose={() => setRequestToCancel(null)}
+                onConfirm={confirmCancelRequest}
+                title="Confirm Request Cancellation"
             >
-                <p>Are you sure you want to delete this help request? This action cannot be undone.</p>
+                <p>Are you sure you want to cancel this help request?</p>
             </ConfirmationModal>
         </>
     );
