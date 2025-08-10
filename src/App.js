@@ -57,8 +57,6 @@ export default function App() {
 
     // --- Authentication State Observer & Page Setup ---
     useEffect(() => {
-        <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6603110789295505"
-     crossorigin="anonymous"></script>
         document.title = "Shades of Hue";
         const favicon = document.querySelector("link[rel~='icon']");
         if (favicon) {
@@ -602,9 +600,9 @@ function UserRequestDashboard({ user, userData, onNavigateToChat }) {
                                     )}
                                     <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-200">
                                         <p className="text-xs text-slate-400">{req.createdAt.toDate().toLocaleString()}</p>
-                                        <div className="flex items-center space-x-4">
+                                        <div className="flex items-center">
                                             {req.status === 'accepted' && (
-                                                <button onClick={() => onNavigateToChat(req.id)} className="text-sky-600 hover:text-sky-800 text-xs font-semibold flex items-center gap-1">
+                                                <button onClick={() => onNavigateToChat(req.id)} className="text-sky-600 hover:text-sky-800 text-xs font-semibold flex items-center gap-1 mr-4">
                                                     <MessageSquare size={14} /> Resolution Center
                                                 </button>
                                             )}
@@ -961,8 +959,6 @@ function AdminDashboard({ user, userData }) {
     const [testimonials, setTestimonials] = useState([]);
     
     const [modalState, setModalState] = useState({ isOpen: false, id: null, name: '' });
-    const [accountToDelete, setAccountToDelete] = useState(null);
-
 
     useEffect(() => {
         const usersQuery = query(collection(db, "users"), where("role", "==", "user"));
@@ -1002,6 +998,7 @@ function AdminDashboard({ user, userData }) {
         if (!modalState.id) return;
         try {
             await updateDoc(doc(db, 'users', modalState.id), { status: 'deactivated' });
+            console.log('Profile deactivated.');
         } catch (error) {
             console.error("Error deactivating profile:", error);
         } finally {
@@ -1009,27 +1006,12 @@ function AdminDashboard({ user, userData }) {
         }
     };
     
-    const openDeleteModal = (id, name) => {
-        setAccountToDelete({ id, name });
-    };
-
-    const confirmDelete = async () => {
-        if (!accountToDelete) return;
-        try {
-            await deleteDoc(doc(db, 'users', accountToDelete.id));
-        } catch (error) {
-            console.error("Error deleting account:", error);
-        } finally {
-            setAccountToDelete(null);
-        }
-    };
-
     const renderContent = () => {
         switch(view) {
             case 'overview': return <AdminStats users={users} orgs={orgs} requests={requests} />;
-            case 'users': return <UserManagementTable users={users} onDeactivate={openDeactivateModal} onDelete={openDeleteModal} />;
-            case 'orgs': return <OrgManagementTable orgs={orgs} onDeactivate={openDeactivateModal} onDelete={openDeleteModal} />;
-            case 'admins': return <AdminManagementTable admins={admins} currentAdminId={user.uid} onDeactivate={openDeactivateModal} onDelete={openDeleteModal} />;
+            case 'users': return <UserManagementTable users={users} onDeactivate={openDeactivateModal} />;
+            case 'orgs': return <OrgManagementTable orgs={orgs} onDeactivate={openDeactivateModal} />;
+            case 'admins': return <AdminManagementTable admins={admins} currentAdminId={user.uid} onDeactivate={openDeactivateModal} />;
             case 'requests': return <RequestLog requests={requests} />;
             case 'donations': return <DonationLog donations={donations} />;
             case 'testimonials': return <TestimonialManagement testimonials={testimonials} />;
@@ -1085,15 +1067,7 @@ function AdminDashboard({ user, userData }) {
                 onConfirm={confirmDeactivate}
                 title="Confirm Deactivation"
             >
-                <p>Are you sure you want to deactivate <strong>{modalState.name}</strong>? They will no longer be able to log in.</p>
-            </ConfirmationModal>
-            <ConfirmationModal
-                isOpen={!!accountToDelete}
-                onClose={() => setAccountToDelete(null)}
-                onConfirm={confirmDelete}
-                title="Confirm Permanent Deletion"
-            >
-                <p>Are you sure you want to permanently delete <strong>{accountToDelete?.name}</strong>? This action is irreversible and will delete their data from the database.</p>
+                <p>Are you sure you want to deactivate <strong>{modalState.name}</strong>? This action is irreversible.</p>
             </ConfirmationModal>
         </div>
     );
@@ -1181,7 +1155,7 @@ function CreateUserForm({ role }) {
     );
 }
 
-function UserManagementTable({ users, onDeactivate, onDelete }) {
+function UserManagementTable({ users, onDeactivate }) {
     return (
         <div>
             <h2 className="text-xl font-semibold mb-4 text-slate-900">Manage Users</h2>
@@ -1206,11 +1180,7 @@ function UserManagementTable({ users, onDeactivate, onDelete }) {
                                     <span className={`px-2 py-1 rounded-full text-xs ${u.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{u.status}</span>
                                 </td>
                                 <td className="px-6 py-4">
-                                    {u.status === 'active' ? (
-                                        <button onClick={() => onDeactivate(u.id, u.name)} className="font-medium text-yellow-600 hover:underline">Deactivate</button>
-                                    ) : (
-                                        <button onClick={() => onDelete(u.id, u.name)} className="font-medium text-red-600 hover:underline">Delete</button>
-                                    )}
+                                    {u.status === 'active' && <button onClick={() => onDeactivate(u.id, u.name)} className="font-medium text-red-600 hover:underline">Deactivate</button>}
                                 </td>
                             </tr>
                         ))}
@@ -1221,7 +1191,7 @@ function UserManagementTable({ users, onDeactivate, onDelete }) {
     );
 }
 
-function OrgManagementTable({ orgs, onDeactivate, onDelete }) {
+function OrgManagementTable({ orgs, onDeactivate }) {
     const [editingOrg, setEditingOrg] = useState(null);
 
     const handleEdit = (org) => {
@@ -1256,11 +1226,7 @@ function OrgManagementTable({ orgs, onDeactivate, onDelete }) {
                                 <td className="px-6 py-4 text-xs">{(Array.isArray(org.services) ? org.services : []).join(', ')}</td>
                                 <td className="px-6 py-4 flex gap-4">
                                     <button onClick={() => handleEdit(org)} className="font-medium text-sky-600 hover:underline"><Edit size={16} /></button>
-                                    {org.status === 'active' ? (
-                                        <button onClick={() => onDeactivate(org.id, org.orgName)} className="font-medium text-yellow-600 hover:underline">Deactivate</button>
-                                    ) : (
-                                        <button onClick={() => onDelete(org.id, org.orgName)} className="font-medium text-red-600 hover:underline">Delete</button>
-                                    )}
+                                    {org.status === 'active' && <button onClick={() => onDeactivate(org.id, org.orgName)} className="font-medium text-red-600 hover:underline">Deactivate</button>}
                                 </td>
                             </tr>
                         ))}
@@ -1272,7 +1238,7 @@ function OrgManagementTable({ orgs, onDeactivate, onDelete }) {
     );
 }
 
-function AdminManagementTable({ admins, currentAdminId, onDeactivate, onDelete }) {
+function AdminManagementTable({ admins, currentAdminId, onDeactivate }) {
     return (
         <div>
             <CreateUserForm role="admin" />
@@ -1295,11 +1261,7 @@ function AdminManagementTable({ admins, currentAdminId, onDeactivate, onDelete }
                                 <td className="px-6 py-4">{admin.createdAt.toDate().toLocaleDateString()}</td>
                                 <td className="px-6 py-4">
                                     {admin.id !== currentAdminId ? (
-                                        admin.status === 'active' ? (
-                                            <button onClick={() => onDeactivate(admin.id, admin.name)} className="font-medium text-yellow-600 hover:underline">Deactivate</button>
-                                        ) : (
-                                            <button onClick={() => onDelete(admin.id, admin.name)} className="font-medium text-red-600 hover:underline">Delete</button>
-                                        )
+                                        <button onClick={() => onDeactivate(admin.id, admin.name)} className="font-medium text-red-600 hover:underline">Deactivate</button>
                                     ) : (
                                         <span className="text-slate-400">Cannot deactivate self</span>
                                     )}
