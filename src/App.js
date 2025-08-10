@@ -24,9 +24,11 @@ import {
     updateDoc,
     deleteDoc,
     Timestamp,
-    getDocs
+    getDocs,
+    orderBy,
+    serverTimestamp
 } from 'firebase/firestore';
-import { ArrowRight, User, Building, Shield, LogOut, Heart, Menu, X, DollarSign, UserCog, MessageSquare, CheckCircle, Clock, Edit, BarChart2, KeyRound, Trash2 } from 'lucide-react';
+import { ArrowRight, User, Building, Shield, LogOut, Heart, Menu, X, DollarSign, UserCog, MessageSquare, CheckCircle, Clock, Edit, BarChart2, KeyRound, Trash2, Send, ArrowLeft } from 'lucide-react';
 
 // --- IMPORTANT: Firebase Configuration ---
 const firebaseConfig = {
@@ -407,8 +409,18 @@ function SignUpPage({ setPage }) {
 
 // --- Dashboards ---
 function UserDashboard({ user, userData }) {
-    const [view, setView] = useState('requests'); // requests, testimonials, or account
-    
+    const [activeChatId, setActiveChatId] = useState(null);
+
+    if (activeChatId) {
+        return <ResolutionCenter requestId={activeChatId} user={user} userData={userData} onBack={() => setActiveChatId(null)} />;
+    }
+
+    return <DashboardTabs onNavigateToChat={setActiveChatId} user={user} userData={userData} />;
+}
+
+function DashboardTabs({ onNavigateToChat, user, userData }) {
+    const [view, setView] = useState('requests');
+
     return (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 animate-fadeIn">
             <h1 className="text-3xl font-bold text-slate-900 mb-2">Welcome, {userData?.name}</h1>
@@ -428,14 +440,15 @@ function UserDashboard({ user, userData }) {
                 </nav>
             </div>
 
-            {view === 'requests' && <UserRequestDashboard user={user} userData={userData} />}
+            {view === 'requests' && <UserRequestDashboard user={user} userData={userData} onNavigateToChat={onNavigateToChat} />}
             {view === 'testimonials' && <UserTestimonialsDashboard user={user} userData={userData} />}
             {view === 'account' && <MyAccountPage user={user} userData={userData} />}
         </div>
     );
 }
 
-function UserRequestDashboard({ user, userData }) {
+
+function UserRequestDashboard({ user, userData, onNavigateToChat }) {
     const [requests, setRequests] = useState([]);
     const [organizations, setOrganizations] = useState([]);
     const [filteredOrgs, setFilteredOrgs] = useState([]);
@@ -587,11 +600,18 @@ function UserRequestDashboard({ user, userData }) {
                                     )}
                                     <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-200">
                                         <p className="text-xs text-slate-400">{req.createdAt.toDate().toLocaleString()}</p>
-                                        {canCancel && (
-                                            <button onClick={() => openCancelRequestModal(req)} className="text-red-500 hover:text-red-700 text-xs font-semibold flex items-center gap-1">
-                                                <Trash2 size={14} /> Cancel Request
-                                            </button>
-                                        )}
+                                        <div>
+                                            {req.status === 'accepted' && (
+                                                <button onClick={() => onNavigateToChat(req.id)} className="text-sky-600 hover:text-sky-800 text-xs font-semibold flex items-center gap-1 mr-4">
+                                                    <MessageSquare size={14} /> Resolution Center
+                                                </button>
+                                            )}
+                                            {canCancel && (
+                                                <button onClick={() => openCancelRequestModal(req)} className="text-red-500 hover:text-red-700 text-xs font-semibold flex items-center gap-1">
+                                                    <Trash2 size={14} /> Cancel Request
+                                                </button>
+                                            )}
+                                        </div>
                                     </div>
                                     {req.status === 'payment_rejected' && req.rejectionReason && (<div className="mt-2 p-3 bg-red-100 rounded-md"><p className="text-sm font-semibold text-red-800">Rejection Reason:</p><p className="text-sm text-red-700">{req.rejectionReason}</p></div>)}
                                     {req.status === 'declined' && req.declineReason && (<div className="mt-2 p-3 bg-red-100 rounded-md"><p className="text-sm font-semibold text-red-800">Reason for Decline:</p><p className="text-sm text-red-700">{req.declineReason}</p></div>)}
@@ -726,6 +746,16 @@ function UserTestimonialsDashboard({ user, userData }) {
 }
 
 function OrganizationDashboard({ user, userData }) {
+    const [activeChatId, setActiveChatId] = useState(null);
+
+    if (activeChatId) {
+        return <ResolutionCenter requestId={activeChatId} user={user} userData={userData} onBack={() => setActiveChatId(null)} />;
+    }
+
+    return <OrgDashboardTabs onNavigateToChat={setActiveChatId} user={user} userData={userData} />;
+}
+
+function OrgDashboardTabs({ onNavigateToChat, user, userData }) {
     const [view, setView] = useState('pending'); // pending, actioned, profile, account
     const [requests, setRequests] = useState([]);
     const [selectedRequest, setSelectedRequest] = useState(null);
@@ -798,7 +828,7 @@ function OrganizationDashboard({ user, userData }) {
     
     const displayedRequests = requests.filter(req => {
         if (view === 'pending') return req.status === 'pending';
-        if (view === 'actioned') return req.status === 'accepted' || req.status === 'declined';
+        if (view === 'actioned') return req.status === 'accepted' || req.status === 'declined' || req.status === 'cancelled_by_user';
         return false;
     });
 
@@ -853,7 +883,7 @@ function OrganizationDashboard({ user, userData }) {
                                     <p className="text-slate-700 mt-2">{req.requestText}</p>
                                  </div>
                                  <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusChip(req.status)}`}>
-                                    {req.status}
+                                    {req.status.replace(/_/g, ' ')}
                                 </span>
                             </div>
                             <div className="flex justify-between items-end">
@@ -869,13 +899,18 @@ function OrganizationDashboard({ user, userData }) {
                                 )}
                             </div>
                              {req.status === 'accepted' && (
-                                <div className="mt-4 border-t border-slate-200 pt-2 flex items-center gap-2">
-                                    <label className="text-sm font-medium">Progress:</label>
-                                    <select value={req.progress || 'Not Started'} onChange={e => handleProgressChange(req.id, e.target.value)} className="bg-slate-100 border border-slate-300 rounded p-1 text-sm">
-                                        <option>Not Started</option>
-                                        <option>In Progress</option>
-                                        <option>Completed</option>
-                                    </select>
+                                <div className="mt-4 border-t border-slate-200 pt-2 flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <label className="text-sm font-medium">Progress:</label>
+                                        <select value={req.progress || 'Not Started'} onChange={e => handleProgressChange(req.id, e.target.value)} className="bg-slate-100 border border-slate-300 rounded p-1 text-sm">
+                                            <option>Not Started</option>
+                                            <option>In Progress</option>
+                                            <option>Completed</option>
+                                        </select>
+                                    </div>
+                                    <button onClick={() => onNavigateToChat(req.id)} className="text-sky-600 hover:text-sky-800 text-xs font-semibold flex items-center gap-1">
+                                        <MessageSquare size={14} /> Resolution Center
+                                    </button>
                                 </div>
                             )}
                              {req.status === 'declined' && req.declineReason && (
@@ -1931,3 +1966,100 @@ function MyAccountPage({ user, userData }) {
         </div>
     );
 }
+
+// --- NEW Resolution Center Component ---
+function ResolutionCenter({ requestId, user, userData, onBack }) {
+    const [messages, setMessages] = useState([]);
+    const [newMessage, setNewMessage] = useState('');
+    const [requestDetails, setRequestDetails] = useState(null);
+    const messagesEndRef = React.useRef(null);
+
+    useEffect(() => {
+        const fetchRequestDetails = async () => {
+            const reqDoc = await getDoc(doc(db, 'requests', requestId));
+            if (reqDoc.exists()) {
+                setRequestDetails(reqDoc.data());
+            }
+        };
+        fetchRequestDetails();
+
+        const q = query(collection(db, 'chats', requestId, 'messages'), orderBy('createdAt', 'asc'));
+        const unsubscribe = onSnapshot(q, (querySnapshot) => {
+            const msgs = [];
+            querySnapshot.forEach((doc) => {
+                msgs.push({ id: doc.id, ...doc.data() });
+            });
+            setMessages(msgs);
+        });
+
+        return () => unsubscribe();
+    }, [requestId]);
+
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [messages]);
+
+    const handleSendMessage = async (e) => {
+        e.preventDefault();
+        if (newMessage.trim() === '') return;
+
+        const messageData = {
+            text: newMessage,
+            senderId: user.uid,
+            senderName: userData.name || userData.orgName,
+            createdAt: serverTimestamp(),
+        };
+
+        await addDoc(collection(db, 'chats', requestId, 'messages'), messageData);
+        setNewMessage('');
+    };
+
+    return (
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12 animate-fadeIn">
+            <button onClick={onBack} className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-6 font-semibold">
+                <ArrowLeft size={18} /> Back to Dashboard
+            </button>
+            <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+                <header className="p-4 border-b border-slate-200 bg-slate-50">
+                    <h2 className="text-xl font-bold text-slate-900">Resolution Center</h2>
+                    {requestDetails && (
+                        <p className="text-sm text-slate-500">
+                            Request for <span className="font-semibold text-sky-600">{requestDetails.helpType}</span> with <span className="font-semibold">{requestDetails.orgName}</span>
+                        </p>
+                    )}
+                </header>
+                <div className="p-4 h-[60vh] overflow-y-auto bg-slate-100 flex flex-col">
+                    <div className="space-y-4 flex-1">
+                        {messages.map(msg => (
+                            <div key={msg.id} className={`flex ${msg.senderId === user.uid ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-md p-3 rounded-lg ${msg.senderId === user.uid ? 'bg-sky-500 text-white' : 'bg-white text-slate-800 shadow-sm'}`}>
+                                    <p className="font-bold text-sm mb-1">{msg.senderName}</p>
+                                    <p>{msg.text}</p>
+                                    <p className={`text-xs mt-2 ${msg.senderId === user.uid ? 'text-sky-200' : 'text-slate-400'}`}>
+                                        {msg.createdAt?.toDate().toLocaleTimeString()}
+                                    </p>
+                                </div>
+                            </div>
+                        ))}
+                        <div ref={messagesEndRef} />
+                    </div>
+                </div>
+                <footer className="p-4 border-t border-slate-200 bg-white">
+                    <form onSubmit={handleSendMessage} className="flex gap-4">
+                        <input
+                            type="text"
+                            value={newMessage}
+                            onChange={(e) => setNewMessage(e.target.value)}
+                            placeholder="Type your message..."
+                            className="flex-1 px-4 py-2 bg-slate-100 border border-slate-300 rounded-full focus:outline-none focus:ring-2 focus:ring-sky-500"
+                        />
+                        <button type="submit" className="bg-sky-600 text-white p-3 rounded-full hover:bg-sky-700 transition-colors flex-shrink-0">
+                            <Send size={20} />
+                        </button>
+                    </form>
+                </footer>
+            </div>
+        </div>
+    );
+}
+
