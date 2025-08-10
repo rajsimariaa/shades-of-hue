@@ -600,7 +600,7 @@ function UserRequestDashboard({ user, userData, onNavigateToChat }) {
                                     )}
                                     <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-200">
                                         <p className="text-xs text-slate-400">{req.createdAt.toDate().toLocaleString()}</p>
-                                        <div>
+                                        <div className="flex items-center">
                                             {req.status === 'accepted' && (
                                                 <button onClick={() => onNavigateToChat(req.id)} className="text-sky-600 hover:text-sky-800 text-xs font-semibold flex items-center gap-1 mr-4">
                                                     <MessageSquare size={14} /> Resolution Center
@@ -2062,4 +2062,3 @@ function ResolutionCenter({ requestId, user, userData, onBack }) {
         </div>
     );
 }
-
