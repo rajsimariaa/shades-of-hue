@@ -9,7 +9,9 @@ import {
     reauthenticateWithCredential,
     EmailAuthProvider,
     updatePassword,
-    deleteUser
+    deleteUser,
+    GoogleAuthProvider,
+    signInWithPopup
 } from 'firebase/auth';
 import { 
     getFirestore, 
@@ -26,9 +28,11 @@ import {
     Timestamp,
     getDocs,
     orderBy,
-    serverTimestamp
+    serverTimestamp,
+    increment
 } from 'firebase/firestore';
-import { ArrowRight, User, Building, Shield, LogOut, Heart, Menu, X, DollarSign, UserCog, MessageSquare, CheckCircle, Clock, Edit, BarChart2, KeyRound, Trash2, Send, ArrowLeft } from 'lucide-react';
+import { getDatabase, ref, onValue, set, onDisconnect, serverTimestamp as rtdbServerTimestamp } from "firebase/database";
+import { ArrowRight, User, Building, Shield, LogOut, Heart, Menu, X, DollarSign, UserCog, MessageSquare, CheckCircle, Clock, Edit, BarChart2, KeyRound, Trash2, Send, ArrowLeft, Activity, BookOpen, Edit3, Home } from 'lucide-react';
 
 // --- IMPORTANT: Firebase Configuration ---
 const firebaseConfig = {
@@ -38,18 +42,20 @@ const firebaseConfig = {
   storageBucket: "shades-of-hue-2025.firebasestorage.app",
   messagingSenderId: "930492769125",
   appId: "1:930492769125:web:e99c0d53efbb2d986e378c",
-  measurementId: "G-BH7BTJ36FX"
+  measurementId: "G-BH7BTJ36FX",
+  databaseURL: "https://shades-of-hue-2025-default-rtdb.firebaseio.com"
 };
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const rtdb = getDatabase(app);
 
 const helpCategories = ["Mental Health Support", "Legal Advice", "Community Connection", "Housing Assistance", "Healthcare Services", "Employment", "General Inquiry"];
 
 // --- Main App Component ---
 export default function App() {
-    const [page, setPage] = useState('home');
+    const [page, setPage] = useState({ name: 'home' });
     const [user, setUser] = useState(null);
     const [userData, setUserData] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -68,69 +74,111 @@ export default function App() {
             document.head.appendChild(newFavicon);
         }
 
-        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-            setLoading(true);
+        let unsubscribeDoc = () => {};
+
+        const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+            unsubscribeDoc(); // Unsubscribe from previous user's document listener
+
             if (currentUser) {
                 const userDocRef = doc(db, 'users', currentUser.uid);
-                const userDocSnap = await getDoc(userDocRef);
-                if (userDocSnap.exists()) {
-                    const fetchedUserData = { id: currentUser.uid, ...userDocSnap.data() };
-                    if (fetchedUserData.status === 'deactivated') {
-                        await signOut(auth);
-                    } else {
-                        setUser(currentUser);
-                        setUserData(fetchedUserData);
+                
+                const userStatusDatabaseRef = ref(rtdb, '/status/' + currentUser.uid);
+                const isOfflineForDatabase = { state: 'offline', last_changed: rtdbServerTimestamp() };
+                const isOnlineForDatabase = { state: 'online', last_changed: rtdbServerTimestamp() };
+
+                onValue(ref(rtdb, '.info/connected'), (snapshot) => {
+                    if (snapshot.val() === false) {
+                        return;
                     }
-                } else {
-                     await signOut(auth);
-                }
+                    onDisconnect(userStatusDatabaseRef).set(isOfflineForDatabase).then(() => {
+                        set(userStatusDatabaseRef, isOnlineForDatabase);
+                    });
+                });
+
+                unsubscribeDoc = onSnapshot(userDocRef, (docSnap) => {
+                    setLoading(true);
+                    if (docSnap.exists()) {
+                        const fetchedUserData = { id: currentUser.uid, ...docSnap.data() };
+                        if (fetchedUserData.status === 'deactivated') {
+                            signOut(auth);
+                        } else {
+                            setUser(currentUser);
+                            setUserData(fetchedUserData);
+                        }
+                    }
+                    setLoading(false);
+                }, (error) => {
+                    console.error("Error listening to user document:", error);
+                    setLoading(false);
+                });
             } else {
                 setUser(null);
                 setUserData(null);
-                setPage('home');
+                setPage({ name: 'home' });
+                setLoading(false);
             }
-            setLoading(false);
         });
-        return () => unsubscribe();
+
+        return () => {
+            unsubscribeAuth();
+            unsubscribeDoc();
+        };
     }, []);
 
     const handleLogout = async () => {
+        if (user) {
+            const userStatusDatabaseRef = ref(rtdb, '/status/' + user.uid);
+            const isOfflineForDatabase = { state: 'offline', last_changed: rtdbServerTimestamp() };
+            await set(userStatusDatabaseRef, isOfflineForDatabase);
+        }
         await signOut(auth);
+        setPage({ name: 'home' });
     };
     
+    const handleNavigation = (pageName, params = {}) => {
+        setPage({ name: pageName, params });
+    };
+
     const renderPage = () => {
         if (loading) {
             return <div className="flex justify-center items-center h-screen bg-slate-50 text-slate-800">Loading...</div>;
         }
 
         if (user && userData) {
-             switch (userData.role) {
+            if (page.name === 'createPost') return <CreatePostPage user={user} userData={userData} setPage={handleNavigation} />;
+            if (page.name === 'blogPost') return <BlogPostPage postId={page.params.id} setPage={handleNavigation} user={user} />;
+            if (page.name === 'blog') return <BlogHomePage setPage={handleNavigation} />;
+            
+            switch (userData.role) {
                 case 'admin': return <AdminDashboard user={user} userData={userData} />;
-                case 'organization': return <OrganizationDashboard user={user} userData={userData} />;
-                case 'user': return <UserDashboard user={user} userData={userData} />;
-                default: return <HomePage setPage={setPage} />;
+                case 'organization': return <OrganizationDashboard user={user} userData={userData} setPage={handleNavigation} />;
+                case 'user': return <UserDashboard user={user} userData={userData} setPage={handleNavigation} />;
+                default: return <HomePage setPage={handleNavigation} />;
             }
         }
 
-        switch (page) {
-            case 'login': return <LoginPage setPage={setPage} />;
-            case 'signup': return <SignUpPage setPage={setPage} />;
-            default: return <HomePage setPage={setPage} />;
+        switch (page.name) {
+            case 'login': return <LoginPage setPage={handleNavigation} />;
+            case 'signup': return <SignUpPage setPage={handleNavigation} />;
+            case 'blogPost': return <BlogPostPage postId={page.params.id} setPage={handleNavigation} user={user} />;
+            case 'blog': return <BlogHomePage setPage={handleNavigation} />;
+            default: return <HomePage setPage={handleNavigation} />;
         }
     };
 
     return (
-        <div className="bg-slate-50 min-h-screen text-slate-800 font-sans">
-            <Navbar user={user} userData={userData} setPage={setPage} handleLogout={handleLogout} isNavOpen={isNavOpen} setIsNavOpen={setIsNavOpen} />
+        <div className="bg-slate-50 min-h-screen font-sans">
+            <Navbar user={user} userData={userData} setPage={handleNavigation} handleLogout={handleLogout} isNavOpen={isNavOpen} setIsNavOpen={setIsNavOpen} />
             <main className="pt-20">{renderPage()}</main>
         </div>
     );
 }
 
-// --- Navigation Component ---
+// --- Navigation ---
 function Navbar({ user, userData, setPage, handleLogout, isNavOpen, setIsNavOpen }) {
     const navLinks = [
         { name: 'Home', page: 'home' },
+        { name: 'Blog', page: 'blog' },
     ];
     
     const isLoggedIn = user && userData;
@@ -138,7 +186,7 @@ function Navbar({ user, userData, setPage, handleLogout, isNavOpen, setIsNavOpen
 
     const handleDonateClick = () => {
         setIsDonationModalOpen(true);
-        setIsNavOpen(false); // Close mobile nav if open
+        setIsNavOpen(false);
     };
 
     const goToDashboard = () => {
@@ -164,7 +212,7 @@ function Navbar({ user, userData, setPage, handleLogout, isNavOpen, setIsNavOpen
                         <div className="hidden md:block">
                             <div className="ml-10 flex items-center space-x-4">
                                 {navLinks.map(link => (
-                                    <a key={link.name} onClick={() => setPage(link.page)} className="text-slate-600 hover:bg-slate-100 hover:text-slate-900 px-3 py-2 rounded-md text-sm font-medium cursor-pointer">{link.name}</a>
+                                    <button key={link.name} onClick={() => setPage(link.page)} className="text-slate-600 hover:bg-slate-100 hover:text-slate-900 px-3 py-2 rounded-md text-sm font-medium">{link.name}</button>
                                 ))}
                                 {isLoggedIn ? (
                                     <>
@@ -200,23 +248,23 @@ function Navbar({ user, userData, setPage, handleLogout, isNavOpen, setIsNavOpen
                     <div className="md:hidden bg-white border-b border-slate-200">
                         <div className="px-2 pt-2 pb-3 space-y-1 sm:px-3">
                             {navLinks.map(link => (
-                                <a key={link.name} onClick={() => { setPage(link.page); setIsNavOpen(false); }} className="text-slate-600 hover:bg-slate-100 hover:text-slate-900 block px-3 py-2 rounded-md text-base font-medium cursor-pointer">{link.name}</a>
+                                <a key={link.name} onClick={() => { setPage(link.page); setIsNavOpen(false); }} className="text-slate-600 hover:bg-slate-100 block px-3 py-2 rounded-md text-base font-medium cursor-pointer">{link.name}</a>
                             ))}
                             {isLoggedIn ? (
                                 <>
-                                    <button onClick={() => { goToDashboard(); setIsNavOpen(false); }} className="w-full text-left flex items-center text-slate-600 hover:bg-slate-100 hover:text-slate-900 px-3 py-2 rounded-md text-base font-medium">
+                                    <button onClick={() => { goToDashboard(); setIsNavOpen(false); }} className="w-full text-left flex items-center text-slate-600 hover:bg-slate-100 px-3 py-2 rounded-md text-base font-medium">
                                         Dashboard
                                     </button>
                                     <span className="text-slate-600 block px-3 py-2 rounded-md text-base font-medium">
                                         Welcome, {userData?.name || 'User'}
                                     </span>
-                                    <button onClick={() => { handleLogout(); setIsNavOpen(false); }} className="w-full text-left flex items-center text-slate-600 hover:bg-slate-100 hover:text-slate-900 px-3 py-2 rounded-md text-base font-medium">
+                                    <button onClick={() => { handleLogout(); setIsNavOpen(false); }} className="w-full text-left flex items-center text-slate-600 hover:bg-slate-100 px-3 py-2 rounded-md text-base font-medium">
                                         <LogOut className="mr-2 h-4 w-4" /> Logout
                                     </button>
                                 </>
                             ) : (
                                 <>
-                                    <button onClick={() => { setPage('login'); setIsNavOpen(false); }} className="w-full text-left text-slate-600 hover:bg-slate-100 hover:text-slate-900 block px-3 py-2 rounded-md text-base font-medium">Login</button>
+                                    <button onClick={() => { setPage('login'); setIsNavOpen(false); }} className="w-full text-left text-slate-600 hover:bg-slate-100 block px-3 py-2 rounded-md text-base font-medium">Login</button>
                                     <button onClick={() => { setPage('signup'); setIsNavOpen(false); }} className="w-full mt-1 text-left bg-sky-600 text-white px-3 py-2 rounded-md text-base font-medium hover:bg-sky-700 transition-colors">Sign Up</button>
                                     <button onClick={handleDonateClick} className="w-full mt-1 text-left bg-rose-500 text-white px-3 py-2 rounded-md text-base font-medium hover:bg-rose-600 transition-colors flex items-center">
                                         <Heart className="mr-2" /> Donate
@@ -300,8 +348,12 @@ function LoginPage({ setPage }) {
         e.preventDefault();
         setError('');
         try {
-            // The onAuthStateChanged listener in App will handle redirection
-            await signInWithEmailAndPassword(auth, email, password);
+            const userCredential = await signInWithEmailAndPassword(auth, email, password);
+            const user = userCredential.user;
+            await updateDoc(doc(db, 'users', user.uid), {
+                lastLogin: serverTimestamp(),
+                loginCount: increment(1)
+            });
         } catch (err) {
             console.error(err.code, err.message);
             if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
@@ -356,12 +408,11 @@ function SignUpPage({ setPage }) {
             
             const userData = {
                 uid: user.uid, email: user.email, name: name, role: role,
-                createdAt: Timestamp.now(), status: 'active'
+                createdAt: Timestamp.now(), status: 'active', loginCount: 1, lastLogin: serverTimestamp()
             };
 
             await setDoc(doc(db, 'users', user.uid), userData);
 
-            // The onAuthStateChanged listener in App will handle redirection
         } catch (err) {
             console.error(err.code, err.message);
             if (err.code === 'auth/email-already-in-use') {
@@ -408,17 +459,17 @@ function SignUpPage({ setPage }) {
 }
 
 // --- Dashboards ---
-function UserDashboard({ user, userData }) {
+function UserDashboard({ user, userData, setPage }) {
     const [activeChatId, setActiveChatId] = useState(null);
 
     if (activeChatId) {
         return <ResolutionCenter requestId={activeChatId} user={user} userData={userData} onBack={() => setActiveChatId(null)} />;
     }
 
-    return <DashboardTabs onNavigateToChat={setActiveChatId} user={user} userData={userData} />;
+    return <DashboardTabs onNavigateToChat={setActiveChatId} user={user} userData={userData} setPage={setPage} />;
 }
 
-function DashboardTabs({ onNavigateToChat, user, userData }) {
+function DashboardTabs({ onNavigateToChat, user, userData, setPage }) {
     const [view, setView] = useState('requests');
 
     return (
@@ -436,6 +487,9 @@ function DashboardTabs({ onNavigateToChat, user, userData }) {
                     </button>
                     <button onClick={() => setView('account')} className={`${view === 'account' ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-400'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}>
                         My Account
+                    </button>
+                    <button onClick={() => setPage('createPost')} className="border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-400 whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">
+                        Write a Post
                     </button>
                 </nav>
             </div>
@@ -600,9 +654,9 @@ function UserRequestDashboard({ user, userData, onNavigateToChat }) {
                                     )}
                                     <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-200">
                                         <p className="text-xs text-slate-400">{req.createdAt.toDate().toLocaleString()}</p>
-                                        <div className="flex items-center">
+                                        <div className="flex items-center space-x-4">
                                             {req.status === 'accepted' && (
-                                                <button onClick={() => onNavigateToChat(req.id)} className="text-sky-600 hover:text-sky-800 text-xs font-semibold flex items-center gap-1 mr-4">
+                                                <button onClick={() => onNavigateToChat(req.id)} className="text-sky-600 hover:text-sky-800 text-xs font-semibold flex items-center gap-1">
                                                     <MessageSquare size={14} /> Resolution Center
                                                 </button>
                                             )}
@@ -745,17 +799,17 @@ function UserTestimonialsDashboard({ user, userData }) {
     );
 }
 
-function OrganizationDashboard({ user, userData }) {
+function OrganizationDashboard({ user, userData, setPage }) {
     const [activeChatId, setActiveChatId] = useState(null);
 
     if (activeChatId) {
         return <ResolutionCenter requestId={activeChatId} user={user} userData={userData} onBack={() => setActiveChatId(null)} />;
     }
 
-    return <OrgDashboardTabs onNavigateToChat={setActiveChatId} user={user} userData={userData} />;
+    return <OrgDashboardTabs onNavigateToChat={setActiveChatId} user={user} userData={userData} setPage={setPage} />;
 }
 
-function OrgDashboardTabs({ onNavigateToChat, user, userData }) {
+function OrgDashboardTabs({ onNavigateToChat, user, userData, setPage }) {
     const [view, setView] = useState('pending'); // pending, actioned, profile, account
     const [requests, setRequests] = useState([]);
     const [selectedRequest, setSelectedRequest] = useState(null);
@@ -850,6 +904,9 @@ function OrgDashboardTabs({ onNavigateToChat, user, userData }) {
                     </button>
                     <button onClick={() => setView('account')} className={`${view === 'account' ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-400'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}>
                         My Account
+                    </button>
+                    <button onClick={() => setPage('createPost')} className="border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-400 whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">
+                        Write a Post
                     </button>
                 </nav>
             </div>
@@ -959,6 +1016,8 @@ function AdminDashboard({ user, userData }) {
     const [testimonials, setTestimonials] = useState([]);
     
     const [modalState, setModalState] = useState({ isOpen: false, id: null, name: '' });
+    const [accountToDelete, setAccountToDelete] = useState(null);
+
 
     useEffect(() => {
         const usersQuery = query(collection(db, "users"), where("role", "==", "user"));
@@ -998,7 +1057,6 @@ function AdminDashboard({ user, userData }) {
         if (!modalState.id) return;
         try {
             await updateDoc(doc(db, 'users', modalState.id), { status: 'deactivated' });
-            console.log('Profile deactivated.');
         } catch (error) {
             console.error("Error deactivating profile:", error);
         } finally {
@@ -1006,17 +1064,33 @@ function AdminDashboard({ user, userData }) {
         }
     };
     
+    const openDeleteModal = (id, name) => {
+        setAccountToDelete({ id, name });
+    };
+
+    const confirmDelete = async () => {
+        if (!accountToDelete) return;
+        try {
+            await deleteDoc(doc(db, 'users', accountToDelete.id));
+        } catch (error) {
+            console.error("Error deleting account:", error);
+        } finally {
+            setAccountToDelete(null);
+        }
+    };
+
     const renderContent = () => {
         switch(view) {
             case 'overview': return <AdminStats users={users} orgs={orgs} requests={requests} />;
-            case 'users': return <UserManagementTable users={users} onDeactivate={openDeactivateModal} />;
-            case 'orgs': return <OrgManagementTable orgs={orgs} onDeactivate={openDeactivateModal} />;
-            case 'admins': return <AdminManagementTable admins={admins} currentAdminId={user.uid} onDeactivate={openDeactivateModal} />;
+            case 'users': return <UserManagementTable users={users} onDeactivate={openDeactivateModal} onDelete={openDeleteModal} />;
+            case 'orgs': return <OrgManagementTable orgs={orgs} onDeactivate={openDeactivateModal} onDelete={openDeleteModal} />;
+            case 'admins': return <AdminManagementTable admins={admins} currentAdminId={user.uid} onDeactivate={openDeactivateModal} onDelete={openDeleteModal} />;
             case 'requests': return <RequestLog requests={requests} />;
             case 'donations': return <DonationLog donations={donations} />;
             case 'testimonials': return <TestimonialManagement testimonials={testimonials} />;
             case 'payment_approvals': return <PaymentApprovalDashboard requests={requests.filter(r => r.status === 'pending_payment_approval')} />;
             case 'account': return <MyAccountPage user={user} userData={userData} />;
+            case 'activity': return <UserActivityDashboard />;
             default: return null;
         }
     };
@@ -1030,6 +1104,9 @@ function AdminDashboard({ user, userData }) {
                     <nav className="flex flex-col space-y-2 bg-white p-4 rounded-lg shadow-lg">
                         <button onClick={() => setView('overview')} className={`flex items-center p-3 rounded-lg transition-colors ${view === 'overview' ? 'bg-sky-100 text-sky-700' : 'hover:bg-slate-100 text-slate-700'}`}>
                             <BarChart2 className="mr-3" /> Platform Overview
+                        </button>
+                        <button onClick={() => setView('activity')} className={`flex items-center p-3 rounded-lg transition-colors ${view === 'activity' ? 'bg-sky-100 text-sky-700' : 'hover:bg-slate-100 text-slate-700'}`}>
+                            <Activity className="mr-3" /> User Activity
                         </button>
                         <button onClick={() => setView('payment_approvals')} className={`flex items-center p-3 rounded-lg transition-colors ${view === 'payment_approvals' ? 'bg-sky-100 text-sky-700' : 'hover:bg-slate-100 text-slate-700'}`}>
                             <CheckCircle className="mr-3" /> Payment Approval
@@ -1067,7 +1144,15 @@ function AdminDashboard({ user, userData }) {
                 onConfirm={confirmDeactivate}
                 title="Confirm Deactivation"
             >
-                <p>Are you sure you want to deactivate <strong>{modalState.name}</strong>? This action is irreversible.</p>
+                <p>Are you sure you want to deactivate <strong>{modalState.name}</strong>? They will no longer be able to log in.</p>
+            </ConfirmationModal>
+            <ConfirmationModal
+                isOpen={!!accountToDelete}
+                onClose={() => setAccountToDelete(null)}
+                onConfirm={confirmDelete}
+                title="Confirm Permanent Deletion"
+            >
+                <p>Are you sure you want to permanently delete <strong>{accountToDelete?.name}</strong>? This action is irreversible and will delete their data from the database.</p>
             </ConfirmationModal>
         </div>
     );
@@ -1155,7 +1240,7 @@ function CreateUserForm({ role }) {
     );
 }
 
-function UserManagementTable({ users, onDeactivate }) {
+function UserManagementTable({ users, onDeactivate, onDelete }) {
     return (
         <div>
             <h2 className="text-xl font-semibold mb-4 text-slate-900">Manage Users</h2>
@@ -1180,7 +1265,11 @@ function UserManagementTable({ users, onDeactivate }) {
                                     <span className={`px-2 py-1 rounded-full text-xs ${u.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{u.status}</span>
                                 </td>
                                 <td className="px-6 py-4">
-                                    {u.status === 'active' && <button onClick={() => onDeactivate(u.id, u.name)} className="font-medium text-red-600 hover:underline">Deactivate</button>}
+                                    {u.status === 'active' ? (
+                                        <button onClick={() => onDeactivate(u.id, u.name)} className="font-medium text-yellow-600 hover:underline">Deactivate</button>
+                                    ) : (
+                                        <button onClick={() => onDelete(u.id, u.name)} className="font-medium text-red-600 hover:underline">Delete</button>
+                                    )}
                                 </td>
                             </tr>
                         ))}
@@ -1191,7 +1280,7 @@ function UserManagementTable({ users, onDeactivate }) {
     );
 }
 
-function OrgManagementTable({ orgs, onDeactivate }) {
+function OrgManagementTable({ orgs, onDeactivate, onDelete }) {
     const [editingOrg, setEditingOrg] = useState(null);
 
     const handleEdit = (org) => {
@@ -1226,7 +1315,11 @@ function OrgManagementTable({ orgs, onDeactivate }) {
                                 <td className="px-6 py-4 text-xs">{(Array.isArray(org.services) ? org.services : []).join(', ')}</td>
                                 <td className="px-6 py-4 flex gap-4">
                                     <button onClick={() => handleEdit(org)} className="font-medium text-sky-600 hover:underline"><Edit size={16} /></button>
-                                    {org.status === 'active' && <button onClick={() => onDeactivate(org.id, org.orgName)} className="font-medium text-red-600 hover:underline">Deactivate</button>}
+                                    {org.status === 'active' ? (
+                                        <button onClick={() => onDeactivate(org.id, org.orgName)} className="font-medium text-yellow-600 hover:underline">Deactivate</button>
+                                    ) : (
+                                        <button onClick={() => onDelete(org.id, org.orgName)} className="font-medium text-red-600 hover:underline">Delete</button>
+                                    )}
                                 </td>
                             </tr>
                         ))}
@@ -1238,7 +1331,7 @@ function OrgManagementTable({ orgs, onDeactivate }) {
     );
 }
 
-function AdminManagementTable({ admins, currentAdminId, onDeactivate }) {
+function AdminManagementTable({ admins, currentAdminId, onDeactivate, onDelete }) {
     return (
         <div>
             <CreateUserForm role="admin" />
@@ -1261,7 +1354,11 @@ function AdminManagementTable({ admins, currentAdminId, onDeactivate }) {
                                 <td className="px-6 py-4">{admin.createdAt.toDate().toLocaleDateString()}</td>
                                 <td className="px-6 py-4">
                                     {admin.id !== currentAdminId ? (
-                                        <button onClick={() => onDeactivate(admin.id, admin.name)} className="font-medium text-red-600 hover:underline">Deactivate</button>
+                                        admin.status === 'active' ? (
+                                            <button onClick={() => onDeactivate(admin.id, admin.name)} className="font-medium text-yellow-600 hover:underline">Deactivate</button>
+                                        ) : (
+                                            <button onClick={() => onDelete(admin.id, admin.name)} className="font-medium text-red-600 hover:underline">Delete</button>
+                                        )
                                     ) : (
                                         <span className="text-slate-400">Cannot deactivate self</span>
                                     )}
@@ -2059,6 +2156,183 @@ function ResolutionCenter({ requestId, user, userData, onBack }) {
                     </form>
                 </footer>
             </div>
+        </div>
+    );
+}
+
+// --- NEW Blog Components ---
+function BlogHomePage({ setPage }) {
+    const [posts, setPosts] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const q = query(collection(db, "blogs"), orderBy("createdAt", "desc"));
+        const unsubscribe = onSnapshot(q, (querySnapshot) => {
+            const postsData = [];
+            querySnapshot.forEach((doc) => {
+                if (doc.data().published === true) {
+                    postsData.push({ id: doc.id, ...doc.data() });
+                }
+            });
+            setPosts(postsData);
+            setLoading(false);
+        }, (error) => {
+            console.error("Error fetching blog posts:", error);
+            setLoading(false);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    if (loading) return <div className="text-center mt-8">Loading posts...</div>;
+
+    return (
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+            <h1 className="text-4xl font-bold text-slate-900 mb-8">Community Blog</h1>
+            <div className="space-y-8">
+                {posts.length > 0 ? (
+                    posts.map(post => (
+                        <div key={post.id} className="bg-white p-6 rounded-lg shadow-md cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setPage('blogPost', { id: post.id })}>
+                            <h2 className="text-2xl font-bold text-sky-700 mb-2">{post.title}</h2>
+                            <p className="text-slate-500 text-sm mb-4">By {post.authorName} on {post.createdAt?.toDate().toLocaleDateString()}</p>
+                            <p className="text-slate-700 line-clamp-3">{post.content}</p>
+                        </div>
+                    ))
+                ) : (
+                    <p className="text-slate-500">No blog posts have been published yet.</p>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function BlogPostPage({ postId, setPage, user }) {
+    const [post, setPost] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+
+    useEffect(() => {
+        const getPost = async () => {
+            const docRef = doc(db, "blogs", postId);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                setPost(docSnap.data());
+            }
+            setLoading(false);
+        };
+        getPost();
+    }, [postId]);
+
+    const handleDelete = async () => {
+        try {
+            await deleteDoc(doc(db, "blogs", postId));
+            setPage('blog');
+        } catch (error) {
+            console.error("Error deleting post:", error);
+        }
+    };
+
+    if (loading) return <div className="text-center mt-8">Loading post...</div>;
+    if (!post) return <div className="text-center mt-8">Post not found.</div>;
+
+    const isAuthor = user && post && user.uid === post.authorId;
+
+    return (
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+            <button onClick={() => setPage('blog')} className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-6 font-semibold">
+                <ArrowLeft size={18} /> Back to Blog
+            </button>
+            <div className="bg-white p-8 rounded-lg shadow-lg">
+                <h1 className="text-4xl font-extrabold text-slate-900 mb-4">{post.title}</h1>
+                <p className="text-slate-500 text-md mb-8">By {post.authorName} on {post.createdAt?.toDate().toLocaleDateString()}</p>
+                <div className="prose max-w-none text-slate-800 whitespace-pre-wrap">
+                    {post.content}
+                </div>
+                {isAuthor && (
+                    <div className="mt-8 border-t pt-4">
+                        <button 
+                            onClick={() => setShowDeleteModal(true)}
+                            className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700"
+                        >
+                            Delete Post
+                        </button>
+                    </div>
+                )}
+            </div>
+            <ConfirmationModal
+                isOpen={showDeleteModal}
+                onClose={() => setShowDeleteModal(false)}
+                onConfirm={handleDelete}
+                title="Confirm Deletion"
+            >
+                <p>Are you sure you want to delete this post? This action cannot be undone.</p>
+            </ConfirmationModal>
+        </div>
+    );
+}
+
+function CreatePostPage({ user, userData, setPage }) {
+    const [title, setTitle] = useState('');
+    const [content, setContent] = useState('');
+    const [error, setError] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    const handlePublish = async (e) => {
+        e.preventDefault();
+        if (!title.trim() || !content.trim()) {
+            setError("Title and content are required.");
+            return;
+        }
+        setIsSubmitting(true);
+        setError('');
+
+        try {
+            await addDoc(collection(db, "blogs"), {
+                title: title,
+                content: content,
+                authorId: user.uid,
+                authorName: userData.name || userData.orgName,
+                createdAt: serverTimestamp(),
+                published: true
+            });
+            setPage('blog');
+        } catch (err) {
+            console.error("Error publishing post:", err);
+            setError("Failed to publish post. Please try again.");
+            setIsSubmitting(false);
+        }
+    };
+
+    return (
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+            <h1 className="text-4xl font-bold text-slate-900 mb-8">Create a New Post</h1>
+            <form onSubmit={handlePublish} className="space-y-6 bg-white p-8 rounded-lg shadow-lg">
+                <div>
+                    <label className="block text-sm font-medium text-slate-700">Title</label>
+                    <input 
+                        type="text" 
+                        value={title} 
+                        onChange={e => setTitle(e.target.value)}
+                        className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-700">Content</label>
+                    <textarea 
+                        value={content} 
+                        onChange={e => setContent(e.target.value)}
+                        rows="15"
+                        className="w-full px-3 py-2 mt-1 text-slate-900 bg-slate-100 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    />
+                </div>
+                {error && <p className="text-red-500 text-sm">{error}</p>}
+                <button 
+                    type="submit" 
+                    disabled={isSubmitting}
+                    className="w-full py-3 px-4 font-semibold text-white bg-sky-600 rounded-md hover:bg-sky-700 disabled:bg-slate-400"
+                >
+                    {isSubmitting ? "Publishing..." : "Publish Post"}
+                </button>
+            </form>
         </div>
     );
 }
