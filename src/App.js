@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
     getAuth, 
@@ -9,9 +9,7 @@ import {
     reauthenticateWithCredential,
     EmailAuthProvider,
     updatePassword,
-    deleteUser,
-    GoogleAuthProvider,
-    signInWithPopup
+    deleteUser
 } from 'firebase/auth';
 import { 
     getFirestore, 
@@ -28,11 +26,9 @@ import {
     Timestamp,
     getDocs,
     orderBy,
-    serverTimestamp,
-    increment
+    serverTimestamp
 } from 'firebase/firestore';
-import { getDatabase, ref, onValue, set, onDisconnect, serverTimestamp as rtdbServerTimestamp } from "firebase/database";
-import { ArrowRight, User, Building, Shield, LogOut, Heart, Menu, X, DollarSign, UserCog, MessageSquare, CheckCircle, Clock, Edit, BarChart2, KeyRound, Trash2, Send, ArrowLeft, Activity, BookOpen, Edit3, Home } from 'lucide-react';
+import { ArrowRight, User, Building, Shield, LogOut, Heart, Menu, X, DollarSign, UserCog, MessageSquare, CheckCircle, Clock, Edit, BarChart2, KeyRound, Trash2, Send, ArrowLeft, BookOpen, Edit3, Home } from 'lucide-react';
 
 // --- IMPORTANT: Firebase Configuration ---
 const firebaseConfig = {
@@ -42,14 +38,12 @@ const firebaseConfig = {
   storageBucket: "shades-of-hue-2025.firebasestorage.app",
   messagingSenderId: "930492769125",
   appId: "1:930492769125:web:e99c0d53efbb2d986e378c",
-  measurementId: "G-BH7BTJ36FX",
-  databaseURL: "https://shades-of-hue-2025-default-rtdb.firebaseio.com"
+  measurementId: "G-BH7BTJ36FX"
 };
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const rtdb = getDatabase(app);
 
 const helpCategories = ["Mental Health Support", "Legal Advice", "Community Connection", "Housing Assistance", "Healthcare Services", "Employment", "General Inquiry"];
 
@@ -61,7 +55,7 @@ export default function App() {
     const [loading, setLoading] = useState(true);
     const [isNavOpen, setIsNavOpen] = useState(false);
 
-    // --- Authentication State Observer & Page Setup ---
+    // --- Authentication State Observer ---
     useEffect(() => {
         document.title = "Shades of Hue";
         const favicon = document.querySelector("link[rel~='icon']");
@@ -73,64 +67,41 @@ export default function App() {
             newFavicon.href = 'https://img.freepik.com/free-vector/lgbt-pride-month-rainbow-heart-background_1017-38228.jpg';
             document.head.appendChild(newFavicon);
         }
-
-        let unsubscribeDoc = () => {};
-
+        
         const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-            unsubscribeDoc(); // Unsubscribe from previous user's document listener
-
-            if (currentUser) {
-                const userDocRef = doc(db, 'users', currentUser.uid);
-                
-                const userStatusDatabaseRef = ref(rtdb, '/status/' + currentUser.uid);
-                const isOfflineForDatabase = { state: 'offline', last_changed: rtdbServerTimestamp() };
-                const isOnlineForDatabase = { state: 'online', last_changed: rtdbServerTimestamp() };
-
-                onValue(ref(rtdb, '.info/connected'), (snapshot) => {
-                    if (snapshot.val() === false) {
-                        return;
-                    }
-                    onDisconnect(userStatusDatabaseRef).set(isOfflineForDatabase).then(() => {
-                        set(userStatusDatabaseRef, isOnlineForDatabase);
-                    });
-                });
-
-                unsubscribeDoc = onSnapshot(userDocRef, (docSnap) => {
-                    setLoading(true);
-                    if (docSnap.exists()) {
-                        const fetchedUserData = { id: currentUser.uid, ...docSnap.data() };
-                        if (fetchedUserData.status === 'deactivated') {
-                            signOut(auth);
-                        } else {
-                            setUser(currentUser);
-                            setUserData(fetchedUserData);
-                        }
-                    }
-                    setLoading(false);
-                }, (error) => {
-                    console.error("Error listening to user document:", error);
-                    setLoading(false);
-                });
-            } else {
-                setUser(null);
-                setUserData(null);
-                setPage({ name: 'home' });
-                setLoading(false);
-            }
+            setUser(currentUser);
+            setLoading(false);
         });
 
-        return () => {
-            unsubscribeAuth();
-            unsubscribeDoc();
-        };
+        return () => unsubscribeAuth();
     }, []);
 
-    const handleLogout = async () => {
+    // --- User Data Listener ---
+    useEffect(() => {
+        let unsubscribeDoc = () => {};
         if (user) {
-            const userStatusDatabaseRef = ref(rtdb, '/status/' + user.uid);
-            const isOfflineForDatabase = { state: 'offline', last_changed: rtdbServerTimestamp() };
-            await set(userStatusDatabaseRef, isOfflineForDatabase);
+            const userDocRef = doc(db, 'users', user.uid);
+            unsubscribeDoc = onSnapshot(userDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const fetchedUserData = { id: user.uid, ...docSnap.data() };
+                    if (fetchedUserData.status === 'deactivated') {
+                        signOut(auth);
+                    } else {
+                        setUserData(fetchedUserData);
+                    }
+                } else {
+                    signOut(auth);
+                }
+            }, (error) => {
+                console.error("Error listening to user document:", error);
+            });
+        } else {
+            setUserData(null);
         }
+        return () => unsubscribeDoc();
+    }, [user]);
+
+    const handleLogout = async () => {
         await signOut(auth);
         setPage({ name: 'home' });
     };
@@ -348,12 +319,7 @@ function LoginPage({ setPage }) {
         e.preventDefault();
         setError('');
         try {
-            const userCredential = await signInWithEmailAndPassword(auth, email, password);
-            const user = userCredential.user;
-            await updateDoc(doc(db, 'users', user.uid), {
-                lastLogin: serverTimestamp(),
-                loginCount: increment(1)
-            });
+            await signInWithEmailAndPassword(auth, email, password);
         } catch (err) {
             console.error(err.code, err.message);
             if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
@@ -408,7 +374,7 @@ function SignUpPage({ setPage }) {
             
             const userData = {
                 uid: user.uid, email: user.email, name: name, role: role,
-                createdAt: Timestamp.now(), status: 'active', loginCount: 1, lastLogin: serverTimestamp()
+                createdAt: Timestamp.now(), status: 'active'
             };
 
             await setDoc(doc(db, 'users', user.uid), userData);
@@ -1073,7 +1039,7 @@ function AdminDashboard({ user, userData }) {
         try {
             await deleteDoc(doc(db, 'users', accountToDelete.id));
         } catch (error) {
-            console.error("Error deleting account:", error);
+            console.error("Error deleting account document:", error);
         } finally {
             setAccountToDelete(null);
         }
@@ -1090,7 +1056,6 @@ function AdminDashboard({ user, userData }) {
             case 'testimonials': return <TestimonialManagement testimonials={testimonials} />;
             case 'payment_approvals': return <PaymentApprovalDashboard requests={requests.filter(r => r.status === 'pending_payment_approval')} />;
             case 'account': return <MyAccountPage user={user} userData={userData} />;
-            case 'activity': return <UserActivityDashboard />;
             default: return null;
         }
     };
@@ -1104,9 +1069,6 @@ function AdminDashboard({ user, userData }) {
                     <nav className="flex flex-col space-y-2 bg-white p-4 rounded-lg shadow-lg">
                         <button onClick={() => setView('overview')} className={`flex items-center p-3 rounded-lg transition-colors ${view === 'overview' ? 'bg-sky-100 text-sky-700' : 'hover:bg-slate-100 text-slate-700'}`}>
                             <BarChart2 className="mr-3" /> Platform Overview
-                        </button>
-                        <button onClick={() => setView('activity')} className={`flex items-center p-3 rounded-lg transition-colors ${view === 'activity' ? 'bg-sky-100 text-sky-700' : 'hover:bg-slate-100 text-slate-700'}`}>
-                            <Activity className="mr-3" /> User Activity
                         </button>
                         <button onClick={() => setView('payment_approvals')} className={`flex items-center p-3 rounded-lg transition-colors ${view === 'payment_approvals' ? 'bg-sky-100 text-sky-700' : 'hover:bg-slate-100 text-slate-700'}`}>
                             <CheckCircle className="mr-3" /> Payment Approval
